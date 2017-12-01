@@ -132,9 +132,9 @@ func GetNewQueue(limit uint) []Email {
 }
 
 func SetErrorStatus(queueID uint, message string) {
-	if message[0:1] == "4" {
-		QueueDb.Model(&queue{ID: queueID}).UpdateColumn("later_status", message)
+	if message[0:1] != "4" {
 		QueueDb.Model(&queue{ID: queueID}).UpdateColumn("repeat", gorm.Expr("repeat + ?", 1))
+		QueueDb.Model(&queue{ID: queueID}).UpdateColumn("later_status", message)
 	} else {
 		QueueDb.Delete(&queue{ID: queueID})
 	}
