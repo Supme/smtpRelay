@@ -1,0 +1,80 @@
+{
+    "memo": "cbb14a430a9bb9622257efb77cd99a929b4d334f221c9ff038a654747f1ed2d1",
+    "projects": [
+        {
+            "name": "github.com/BurntSushi/toml",
+            "version": "v0.3.0",
+            "revision": "b26d9c308763d68093482582cea63d69be07a0f0",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/jinzhu/gorm",
+            "version": "v1.0",
+            "revision": "5174cc5c242a728b435ea2be8a2f7f998e15429b",
+            "packages": [
+                ".",
+                "dialects/sqlite"
+            ]
+        },
+        {
+            "name": "github.com/jinzhu/inflection",
+            "branch": "master",
+            "revision": "1c35d901db3da928c72a72d8458480cc9ade058f",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/mattn/go-sqlite3",
+            "version": "v1.4.0",
+            "revision": "ed69081a91fd053f17672236b0dd52ba7485e1a3",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/pingcap/tidb",
+            "version": "v1.0.3",
+            "revision": "b8bcf9c3d68dc16e2d75a99212686130f895b748",
+            "packages": [
+                "_vendor/src/github.com/juju/errors"
+            ]
+        },
+        {
+            "name": "github.com/sfreiberg/go-smtpd",
+            "branch": "master",
+            "revision": "b208d773e1ddf0bdbb91ba3327be499404e2911b",
+            "packages": [
+                "smtpd"
+            ]
+        },
+        {
+            "name": "github.com/supme/directEmail",
+            "version": "0.2",
+            "revision": "ac5a15cab9ac3dab9b10612840f7f28736004af6",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/toorop/go-dkim",
+            "branch": "master",
+            "revision": "2c853a63fe4c076c35ca2ad49ad725a7f8d3ad86",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "golang.org/x/net",
+            "branch": "release-branch.go1.6",
+            "revision": "62685c2d7ca23c807425dca88b11a3e2323dab41",
+            "packages": [
+                "context",
+                "idna",
+                "proxy"
+            ]
+        }
+    ]
+}
