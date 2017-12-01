@@ -5,7 +5,6 @@ import (
 	"github.com/supme/smtpRelay/model"
 	"sync"
 	"time"
-	"log"
 )
 
 func Run() {
@@ -26,7 +25,6 @@ func sendQueue() {
 		}
 		var wg sync.WaitGroup
 		for i := range emails {
-			log.Println("Send email to", emails[i].Rcpt, "repeat count", emails[i].Repeat)
 			wg.Add(1)
 			go func(wg *sync.WaitGroup, email model.Email) {
 				sender := directEmail.New()
@@ -39,8 +37,6 @@ func sendQueue() {
 					if email.Repeat >= model.MaxRepeatSend {
 						model.SetStatus(email.ID, email.From, email.Rcpt, email.MessageID, err.Error())
 					} else {
-						m := err.Error()
-						log.Printf("Error fist letter `%s` from message `%s`", m[0:1], m)
 						model.SetErrorStatus(email.ID, err.Error())
 					}
 				} else {
