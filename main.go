@@ -10,50 +10,37 @@ import (
 
 var configFile string
 
-var config struct {
-	QueueDbDialect        string   `toml:"QueueDbDialect"`
-	QueueDbConnect        string   `toml:"QueueDbConnect"`
-	StatusDbDialect       string   `toml:"StatusDbDialect"`
-	StatusDbConnect       string   `toml:"StatusDbConnect"`
-	Hostname              string   `toml:"Hostname"`
-	AllowIP               []string `toml:"AllowIP"`
-	AllowDomains          []string `toml:"AllowDomains"`
-	SmtpListenAddr        string   `toml:"SmtpListenAddr"`
-	MaxRepeatSend         uint     `toml:"MaxRepeatSend"`
-	RepeatIntervalMinutes uint     `toml:"RepeatIntervalMinutes"`
-}
-
 func init() {
 	flag.StringVar(&configFile, "c", "./config.ini", "Config file")
 	flag.Parse()
 }
 
 func main() {
-	if _, err := toml.DecodeFile(configFile, &config); err != nil {
+	if _, err := toml.DecodeFile(configFile, &model.Config); err != nil {
 		panic(err)
 	}
 
-	err := model.OpenQueueDb(config.QueueDbDialect, config.QueueDbConnect)
+	err := model.OpenQueueDb()
 	if err != nil {
 		panic(err)
 	}
 	defer model.QueueDb.Close()
 
-	err = model.OpenStatusDb(config.StatusDbDialect, config.StatusDbConnect)
+	err = model.OpenStatusDb()
 	if err != nil {
 		panic(err)
 	}
 	defer model.QueueDb.Close()
 
-	model.Hostname = config.Hostname
-
-	model.SetAllowIP(config.AllowIP...)
-	model.SetAllowDomains(config.AllowDomains...)
-
-	model.MaxRepeatSend = config.MaxRepeatSend
-	model.RepeatIntervalMinutes = config.RepeatIntervalMinutes
+	//model.Hostname = config.Hostname
+	//
+	//model.SetAllowIP(config.AllowIP...)
+	//model.SetAllowDomains(config.AllowDomains...)
+	//
+	//model.MaxRepeatSend = config.MaxRepeatSend
+	//model.RepeatIntervalMinutes = config.RepeatIntervalMinutes
 
 	sender.Run()
 
-	server.Run(config.SmtpListenAddr)
+	server.Run()
 }

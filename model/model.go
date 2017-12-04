@@ -7,29 +7,31 @@ import (
 	_ "github.com/jinzhu/gorm/dialects/postgres"
 	_ "github.com/jinzhu/gorm/dialects/mssql"
 	"github.com/sfreiberg/go-smtpd/smtpd"
-	"log"
 	"time"
+	"strings"
 )
+
+var Config struct {
+	QueueDbDialect        string   `toml:"QueueDbDialect"`
+	QueueDbConnect        string   `toml:"QueueDbConnect"`
+	StatusDbDialect       string   `toml:"StatusDbDialect"`
+	StatusDbConnect       string   `toml:"StatusDbConnect"`
+	Hostname              string   `toml:"Hostname"`
+	AllowIP               []string `toml:"AllowIP"`
+	AllowDomains          []string `toml:"AllowDomains"`
+	SmtpListenAddr        string   `toml:"SmtpListenAddr"`
+	MaxRepeatSend         uint     `toml:"MaxRepeatSend"`
+	RepeatIntervalMinutes uint     `toml:"RepeatIntervalMinutes"`
+	SendStream uint `toml:"SendStream"`
+	ResendStream uint `toml:"ResendStream"`
+}
 
 var (
 	QueueDb               *gorm.DB
 	StatusDb              *gorm.DB
-	Hostname              string
-	MaxRepeatSend         uint
-	RepeatIntervalMinutes uint
 )
 
-type Email struct {
-	ID           uint
-	MessageID    string
-	From         string
-	Rcpt         string
-	RcptHostname string
-	Data         []byte
-	Repeat       uint
-}
-
-type queue struct {
+type Queue struct {
 	ID           uint `gorm:"primary_key"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -45,25 +47,26 @@ type queue struct {
 
 type status struct {
 	ID        uint `gorm:"primary_key"`
+	QueuedAt  time.Time
+	SendingAt time.Time
 	From      string
 	Rcpt      string
 	MessageID string
-	UpdatedAt time.Time
 	Status    string
 }
 
-func OpenQueueDb(dialect string, conn string) (err error) {
-	QueueDb, err = gorm.Open(dialect, conn)
+func OpenQueueDb() (err error) {
+	QueueDb, err = gorm.Open(Config.QueueDbDialect, Config.QueueDbConnect)
 	if err != nil {
 		return
 	}
-	QueueDb.AutoMigrate(&queue{})
-	//	QueueDb.LogMode(true)
+	QueueDb.AutoMigrate(&Queue{})
+	QueueDb.LogMode(true)
 	return
 }
 
-func OpenStatusDb(dialect string, conn string) (err error) {
-	StatusDb, err = gorm.Open(dialect, conn)
+func OpenStatusDb() (err error) {
+	StatusDb, err = gorm.Open(Config.StatusDbDialect, Config.StatusDbConnect)
 	if err != nil {
 		return
 	}
@@ -74,7 +77,7 @@ func OpenStatusDb(dialect string, conn string) (err error) {
 
 func AddToQueue(messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) {
 	for _, rcpt := range rcpts {
-		QueueDb.Create(&queue{
+		QueueDb.Create(&Queue{
 			MessageID:    messageID,
 			From:         from.Email(),
 			FromHostname: from.Hostname(),
@@ -85,67 +88,43 @@ func AddToQueue(messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddr
 	}
 }
 
-func GetRepeatQueue(limit uint) []Email {
-	var (
-		emails []Email
-	)
-	rows, err := QueueDb.Model(queue{}).
-		Select("`id`, `message_id`, `from`, `rcpt`, `rcpt_hostname`, `data`, `repeat`").
-		Where("updated_at < ? AND repeat>0", time.Now().Local().Add(-1*time.Minute*time.Duration(RepeatIntervalMinutes))).
+func GetRepeatQueue(limit uint) []Queue {
+	var emails []Queue
+	QueueDb.Where("updated_at < ? AND repeat > 0", time.Now().Local().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
 		Limit(int(limit)).
-		Rows()
-	if err != nil {
-		log.Print(err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email Email
-		rows.Scan(&email.ID, &email.MessageID, &email.From, &email.Rcpt, &email.RcptHostname, &email.Data, &email.Repeat)
-		emails = append(emails, email)
-	}
-
+		Find(&emails)
 	return emails
 }
 
-func GetNewQueue(limit uint) []Email {
-	var (
-		emails []Email
-	)
-	rows, err := QueueDb.Model(queue{}).
-		Select("`id`, `message_id`, `from`, `rcpt`, `rcpt_hostname`, `data`, `repeat`").
-		Where("repeat=0").
+func GetNewQueue(limit uint) []Queue {
+	var	emails []Queue
+	QueueDb.Where("repeat=0").
 		Limit(int(limit)).
-		Rows()
-	if err != nil {
-		log.Print(err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email Email
-		rows.Scan(&email.ID, &email.MessageID, &email.From, &email.Rcpt, &email.RcptHostname, &email.Data, &email.Repeat)
-		emails = append(emails, email)
-	}
-
+		Find(&emails)
 	return emails
 }
 
-func SetErrorStatus(queueID uint, message string) {
-	if message[0:1] != "4" {
-		QueueDb.Model(&queue{ID: queueID}).UpdateColumn("repeat", gorm.Expr("repeat + ?", 1))
-		QueueDb.Model(&queue{ID: queueID}).UpdateColumn("later_status", message)
+func SetStatus(email *Queue) {
+	email.Repeat++
+	if email.Repeat >= Config.MaxRepeatSend {
+		setStatus(email)
 	} else {
-		QueueDb.Delete(&queue{ID: queueID})
+		if strings.HasPrefix(email.LaterStatus, "4") {
+			QueueDb.Model(&Queue{ID: email.ID}).UpdateColumns(Queue{Repeat: email.Repeat, LaterStatus: email.LaterStatus, UpdatedAt:time.Now()})
+		} else {
+			setStatus(email)
+		}
 	}
 }
 
-func SetStatus(queueID uint, from, rcpt, messageID, message string) {
+func setStatus(email *Queue) {
 	StatusDb.Create(&status{
-		From:      from,
-		Rcpt:      rcpt,
-		MessageID: messageID,
-		Status:    message,
+		QueuedAt:  email.CreatedAt,
+		SendingAt: time.Now(),
+		From:      email.From,
+		Rcpt:      email.Rcpt,
+		MessageID: email.MessageID,
+		Status:    email.LaterStatus,
 	})
-	QueueDb.Delete(&queue{ID: queueID})
+	QueueDb.Delete(&Queue{ID: email.ID})
 }

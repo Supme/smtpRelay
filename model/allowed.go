@@ -5,25 +5,25 @@ import (
 	"net"
 )
 
-var (
-	allowIPs     []string
-	allowDomains []string
-)
-
-func SetAllowIP(allowIP ...string) {
-	allowIPs = append(allowIPs, allowIP...)
-}
-
-func SetAllowDomains(allowDomain ...string) {
-	allowDomains = append(allowDomains, allowDomain...)
-}
+//var (
+//	allowIPs     []string
+//	allowDomains []string
+//)
+//
+//func SetAllowIP(allowIP ...string) {
+//	allowIPs = append(allowIPs, allowIP...)
+//}
+//
+//func SetAllowDomains(allowDomain ...string) {
+//	allowDomains = append(allowDomains, allowDomain...)
+//}
 
 func CheckAllow(ip, domain string) bool {
 	return checkAllowIP(ip) && checkAllowDomain(domain)
 }
 
 func checkAllowIP(ip string) bool {
-	if len(allowIPs) == 0 {
+	if len(Config.AllowIP) == 0 {
 		return true
 	}
 	host, _, err := net.SplitHostPort(ip)
@@ -31,8 +31,8 @@ func checkAllowIP(ip string) bool {
 		log.Print(err)
 		return false
 	}
-	for i := range allowIPs {
-		if allowIPs[i] == host {
+	for i := range Config.AllowIP {
+		if Config.AllowIP[i] == host {
 			return true
 		}
 	}
@@ -40,11 +40,11 @@ func checkAllowIP(ip string) bool {
 }
 
 func checkAllowDomain(domain string) bool {
-	if len(allowDomains) == 0 {
+	if len(Config.AllowDomains) == 0 {
 		return true
 	}
-	for i := range allowDomains {
-		if allowDomains[i] == domain {
+	for i := range Config.AllowDomains {
+		if Config.AllowDomains[i] == domain {
 			return true
 		}
 	}

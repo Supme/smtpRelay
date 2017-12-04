@@ -53,13 +53,13 @@ func onNewMail(c smtpd.Connection, from smtpd.MailAddress) (smtpd.Envelope, erro
 	return env, nil
 }
 
-func Run(listenAddr string) {
+func Run() {
 	s := &smtpd.Server{
-		Hostname:  model.Hostname,
-		Addr:      listenAddr,
+		Hostname:  model.Config.Hostname,
+		Addr:      model.Config.SmtpListenAddr,
 		OnNewMail: onNewMail,
 	}
-	log.Printf("Starting SMTP server on %s", listenAddr)
+	log.Printf("Starting SMTP server on %s", model.Config.SmtpListenAddr)
 	err := s.ListenAndServe()
 	if err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
