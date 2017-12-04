@@ -9,6 +9,7 @@ import (
 	"regexp"
 )
 
+// ToDo X-Postmaster-Msgtype
 var (
 	messageIDre = regexp.MustCompile(`[Mm][Ee][Ss][Ss][Aa][Gg][Ee].?[Ii][Dd]:\s*<(.+)>`)
 )
