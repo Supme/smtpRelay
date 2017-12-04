@@ -32,14 +32,6 @@ func main() {
 	}
 	defer model.QueueDb.Close()
 
-	//model.Hostname = config.Hostname
-	//
-	//model.SetAllowIP(config.AllowIP...)
-	//model.SetAllowDomains(config.AllowDomains...)
-	//
-	//model.MaxRepeatSend = config.MaxRepeatSend
-	//model.RepeatIntervalMinutes = config.RepeatIntervalMinutes
-
 	sender.Run()
 
 	server.Run()

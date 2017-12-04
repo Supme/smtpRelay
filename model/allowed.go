@@ -5,19 +5,7 @@ import (
 	"net"
 )
 
-//var (
-//	allowIPs     []string
-//	allowDomains []string
-//)
-//
-//func SetAllowIP(allowIP ...string) {
-//	allowIPs = append(allowIPs, allowIP...)
-//}
-//
-//func SetAllowDomains(allowDomain ...string) {
-//	allowDomains = append(allowDomains, allowDomain...)
-//}
-
+// CheckAllow check right for IP and sender email domain
 func CheckAllow(ip, domain string) bool {
 	return checkAllowIP(ip) && checkAllowDomain(domain)
 }

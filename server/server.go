@@ -9,7 +9,9 @@ import (
 	"regexp"
 )
 
-var messageIdRE = regexp.MustCompile(`[Mm][Ee][Ss][Ss][Aa][Gg][Ee].?[Ii][Dd]:\s*<(.+)>`)
+var (
+	messageIDre = regexp.MustCompile(`[Mm][Ee][Ss][Ss][Aa][Gg][Ee].?[Ii][Dd]:\s*<(.+)>`)
+)
 
 type env struct {
 	rcpts     []smtpd.MailAddress
@@ -31,7 +33,7 @@ func (e *env) BeginData() error {
 }
 
 func (e *env) Write(line []byte) error {
-	m := messageIdRE.FindSubmatch(line)
+	m := messageIDre.FindSubmatch(line)
 	if m != nil && len(m) == 2 {
 		e.messageID = string(m[1])
 	}
@@ -53,13 +55,14 @@ func onNewMail(c smtpd.Connection, from smtpd.MailAddress) (smtpd.Envelope, erro
 	return env, nil
 }
 
+// Run started SMTP server
 func Run() {
 	s := &smtpd.Server{
 		Hostname:  model.Config.Hostname,
-		Addr:      model.Config.SmtpListenAddr,
+		Addr:      model.Config.SMTPListenAddr,
 		OnNewMail: onNewMail,
 	}
-	log.Printf("Starting SMTP server on %s", model.Config.SmtpListenAddr)
+	log.Printf("Starting SMTP server on %s", model.Config.SMTPListenAddr)
 	err := s.ListenAndServe()
 	if err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
