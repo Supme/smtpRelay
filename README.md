@@ -35,3 +35,13 @@ or change config file path
 ```
 ./smtpRelay -c /path/to/youconfig.ini
 ```
+
+in log database create table "statuses" structure
+
+| id | queued_at | sending_at | from | rcpt | message_id | status |
+|----|:-----------:|:------------:|:------:|:------:|:------------:|--------:|
+
+in queue database create table "queues" structure
+
+| id | created_at | updated_at | message_id | from | from_hostname | rcpt   | rcpt_hostname | data | repeat | later_status|
+|----|:-----------:|:------------:|:------:|:------:|:------------:|:------------:|:------------:|:------------:|:------------:|--------:|
