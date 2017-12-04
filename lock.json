@@ -89,7 +89,7 @@
         {
             "name": "github.com/toorop/go-dkim",
             "branch": "master",
-            "revision": "2c853a63fe4c076c35ca2ad49ad725a7f8d3ad86",
+            "revision": "83672023c79e6b352bf9d4908e6c060c7a24323c",
             "packages": [
                 "."
             ]
@@ -107,9 +107,7 @@
             "branch": "release-branch.go1.6",
             "revision": "62685c2d7ca23c807425dca88b11a3e2323dab41",
             "packages": [
-                "context",
-                "idna",
-                "proxy"
+                "context"
             ]
         }
     ]
