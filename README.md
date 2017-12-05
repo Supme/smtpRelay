@@ -1,6 +1,8 @@
 # smtpRelay
 small SMTP relay
 
+[Download binary](https://github.com/Supme/smtpRelay/releases)
+
 example config.ini
 ``` $ini
 # Db for queue emails
@@ -35,6 +37,10 @@ or change config file path
 ```
 ./smtpRelay -c /path/to/youconfig.ini
 ```
+
+For run as service in Windows use [NSSM](http://nssm.cc/download)
+
+
 
 in log database create table "statuses" structure
 
