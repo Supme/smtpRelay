@@ -18,11 +18,10 @@ import (
 	"fmt"
 	"sync"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/pd/pd-client"
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	goctx "golang.org/x/net/context"
 )
 
@@ -33,7 +32,7 @@ type LockResolver struct {
 	store *tikvStore
 	mu    struct {
 		sync.RWMutex
-		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
+		// Cache resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
 		recentResolved *list.List
 	}
@@ -49,21 +48,13 @@ func newLockResolver(store *tikvStore) *LockResolver {
 }
 
 // NewLockResolver creates a LockResolver.
-// It is exported for other services to use. For instance, binlog service needs
-// to determine a transaction's commit state.
 func NewLockResolver(etcdAddrs []string) (*LockResolver, error) {
 	pdCli, err := pd.NewClient(etcdAddrs)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(goctx.TODO()))
-
-	spkv, err := NewEtcdSafePointKV(etcdAddrs)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	s, err := newTikvStore(uuid, &codecPDClient{pdCli}, spkv, newRPCClient(), false)
+	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID())
+	s, err := newTikvStore(uuid, &codecPDClient{pdCli}, newRPCClient(), false)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -205,9 +196,9 @@ func (lr *LockResolver) getTxnStatus(bo *Backoffer, txnID uint64, primary []byte
 	lockResolverCounter.WithLabelValues("query_txn_status").Inc()
 
 	var status TxnStatus
-	req := &tikvrpc.Request{
-		Type: tikvrpc.CmdCleanup,
-		Cleanup: &kvrpcpb.CleanupRequest{
+	req := &kvrpcpb.Request{
+		Type: kvrpcpb.MessageType_CmdCleanup,
+		CmdCleanupReq: &kvrpcpb.CmdCleanupRequest{
 			Key:          primary,
 			StartVersion: txnID,
 		},
@@ -217,22 +208,18 @@ func (lr *LockResolver) getTxnStatus(bo *Backoffer, txnID uint64, primary []byte
 		if err != nil {
 			return status, errors.Trace(err)
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, readTimeoutShort)
+		resp, err := lr.store.SendKVReq(bo, req, loc.Region, readTimeoutShort)
 		if err != nil {
 			return status, errors.Trace(err)
 		}
-		regionErr, err := resp.GetRegionError()
-		if err != nil {
-			return status, errors.Trace(err)
-		}
-		if regionErr != nil {
+		if regionErr := resp.GetRegionError(); regionErr != nil {
 			err = bo.Backoff(boRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				return status, errors.Trace(err)
 			}
 			continue
 		}
-		cmdResp := resp.Cleanup
+		cmdResp := resp.GetCmdCleanupResp()
 		if cmdResp == nil {
 			return status, errors.Trace(errBodyMissing)
 		}
@@ -262,31 +249,27 @@ func (lr *LockResolver) resolveLock(bo *Backoffer, l *Lock, status TxnStatus, cl
 		if _, ok := cleanRegions[loc.Region]; ok {
 			return nil
 		}
-		req := &tikvrpc.Request{
-			Type: tikvrpc.CmdResolveLock,
-			ResolveLock: &kvrpcpb.ResolveLockRequest{
+		req := &kvrpcpb.Request{
+			Type: kvrpcpb.MessageType_CmdResolveLock,
+			CmdResolveLockReq: &kvrpcpb.CmdResolveLockRequest{
 				StartVersion: l.TxnID,
 			},
 		}
 		if status.IsCommitted() {
-			req.ResolveLock.CommitVersion = status.CommitTS()
+			req.GetCmdResolveLockReq().CommitVersion = status.CommitTS()
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, readTimeoutShort)
+		resp, err := lr.store.SendKVReq(bo, req, loc.Region, readTimeoutShort)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		regionErr, err := resp.GetRegionError()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if regionErr != nil {
+		if regionErr := resp.GetRegionError(); regionErr != nil {
 			err = bo.Backoff(boRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				return errors.Trace(err)
 			}
 			continue
 		}
-		cmdResp := resp.ResolveLock
+		cmdResp := resp.GetCmdResolveLockResp()
 		if cmdResp == nil {
 			return errors.Trace(errBodyMissing)
 		}

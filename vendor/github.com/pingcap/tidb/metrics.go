@@ -57,13 +57,6 @@ var (
 			Help:      "Bucketed histogram of session retry count.",
 			Buckets:   prometheus.LinearBuckets(0, 1, 10),
 		})
-	transactionCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "tidb",
-			Subsystem: "server",
-			Name:      "transaction_total",
-			Help:      "Counter of transactions.",
-		}, []string{"type"})
 )
 
 func init() {
@@ -72,5 +65,4 @@ func init() {
 	prometheus.MustRegister(sessionExecuteRunDuration)
 	prometheus.MustRegister(schemaLeaseErrorCounter)
 	prometheus.MustRegister(sessionRetry)
-	prometheus.MustRegister(transactionCounter)
 }

@@ -44,10 +44,14 @@ For run as service in Windows use [NSSM](http://nssm.cc/download)
 
 in log database create table "statuses" structure
 
-| id | queued_at | sending_at | from | rcpt | message_id | status |
-|----|:-----------:|:------------:|:------:|:------:|:------------:|--------:|
+| id | queued_at | sending_at | from | rcpt | message_type | message_id | status |
+|----|:-----------:|:------------:|:------:|:------:|:------------:|:------------:|--------:|
+
+message_type is string from "X-Postmaster-Msgtype" header
+
+message_id is string from "Message-Id" header
 
 in queue database create table "queues" structure
 
-| id | created_at | updated_at | message_id | from | from_hostname | rcpt   | rcpt_hostname | data | repeat | later_status|
-|----|:-----------:|:------------:|:------:|:------:|:------------:|:------------:|:------------:|:------------:|:------------:|--------:|
+| id | created_at | updated_at | message_type | message_id | from | from_hostname | rcpt   | rcpt_hostname | data | repeat | later_status|
+|----|:-----------:|:------------:|:------:|:------:|:------:|:------------:|:------------:|:------------:|:------------:|:------------:|--------:|

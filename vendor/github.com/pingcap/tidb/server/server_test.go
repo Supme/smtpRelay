@@ -25,50 +25,25 @@ import (
 	"testing"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/go-sql-driver/mysql"
+	"github.com/ngaut/log"
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/executor"
 	tmysql "github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/printer"
 )
 
 func TestT(t *testing.T) {
 	CustomVerboseFlag = true
-	logLevel := os.Getenv("log_level")
-	logutil.InitLogger(&logutil.LogConfig{
-		Level: logLevel,
-	})
 	TestingT(t)
 }
 
 var regression = true
 
-var defaultDSNConfig = mysql.Config{
-	User:   "root",
-	Net:    "tcp",
-	Addr:   "127.0.0.1:4001",
-	DBName: "test",
-	Strict: true,
-}
+var dsn = "root@tcp(localhost:4001)/test?strict=true"
 
-type configOverrider func(*mysql.Config)
-
-// getDSN generates a DSN string for MySQL connection.
-func getDSN(overriders ...configOverrider) string {
-	var config = defaultDSNConfig
-	for _, overrider := range overriders {
-		if overrider != nil {
-			overrider(&config)
-		}
-	}
-	return config.FormatDSN()
-}
-
-// runTests runs tests using the default database `test`.
-func runTests(c *C, overrider configOverrider, tests ...func(dbt *DBTest)) {
-	db, err := sql.Open("mysql", getDSN(overrider))
+func runTests(c *C, dsn string, tests ...func(dbt *DBTest)) {
+	db, err := sql.Open("mysql", dsn)
 	c.Assert(err, IsNil, Commentf("Error connecting"))
 	defer db.Close()
 
@@ -81,34 +56,32 @@ func runTests(c *C, overrider configOverrider, tests ...func(dbt *DBTest)) {
 	}
 }
 
-// runTestsOnNewDB runs tests using a specified database which will be created before the test and destroyed after the test.
-func runTestsOnNewDB(c *C, overrider configOverrider, dbName string, tests ...func(dbt *DBTest)) {
-	dsn := getDSN(overrider, func(config *mysql.Config) {
-		config.DBName = ""
-	})
-	db, err := sql.Open("mysql", dsn)
+func runTestsOnNewDB(c *C, dbName string, tests ...func(dbt *DBTest)) {
+	db, err := sql.Open("mysql", "root@tcp(localhost:4001)/?strict=true")
 	c.Assert(err, IsNil, Commentf("Error connecting"))
 	defer db.Close()
 
-	_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dbName))
-	c.Assert(err, IsNil, Commentf("Error drop database %s: %s", dbName, err))
+	dropDB := fmt.Sprintf("DROP DATABASE IF EXISTS %s;", dbName)
+	createDB := fmt.Sprintf("CREATE DATABASE %s;", dbName)
+	useDB := fmt.Sprintf("USE %s;", dbName)
 
-	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE `%s`;", dbName))
-	c.Assert(err, IsNil, Commentf("Error create database %s: %s", dbName, err))
+	_, err = db.Exec(dropDB)
+	c.Assert(err, IsNil, Commentf("Error drop database %s", dbName))
 
-	defer func() {
-		_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dbName))
-		c.Assert(err, IsNil, Commentf("Error drop database %s: %s", dbName, err))
-	}()
+	_, err = db.Exec(createDB)
+	c.Assert(err, IsNil, Commentf("Error create database %s", dbName))
 
-	_, err = db.Exec(fmt.Sprintf("USE `%s`;", dbName))
-	c.Assert(err, IsNil, Commentf("Error use database %s: %s", dbName, err))
+	_, err = db.Exec(useDB)
+	c.Assert(err, IsNil, Commentf("Error use database %s", dbName))
 
 	dbt := &DBTest{c, db}
 	for _, test := range tests {
 		test(dbt)
 		dbt.db.Exec("DROP TABLE IF EXISTS test")
 	}
+
+	_, err = db.Exec(dropDB)
+	c.Assert(err, IsNil, Commentf("Error drop database %s", dbName))
 }
 
 type DBTest struct {
@@ -141,8 +114,8 @@ func (dbt *DBTest) mustQueryRows(query string, args ...interface{}) {
 	rows.Close()
 }
 
-func runTestRegression(c *C, overrider configOverrider, dbName string) {
-	runTestsOnNewDB(c, overrider, dbName, func(dbt *DBTest) {
+func runTestRegression(c *C, dbName string) {
+	runTestsOnNewDB(c, dbName, func(dbt *DBTest) {
 		// Create Table
 		dbt.mustExec("CREATE TABLE test (val TINYINT)")
 
@@ -216,7 +189,7 @@ func runTestRegression(c *C, overrider configOverrider, dbName string) {
 
 func runTestPrepareResultFieldType(t *C) {
 	var param int64 = 83
-	runTests(t, nil, func(dbt *DBTest) {
+	runTests(t, dsn, func(dbt *DBTest) {
 		stmt, err := dbt.db.Prepare(`SELECT ?`)
 		if err != nil {
 			dbt.Fatal(err)
@@ -236,7 +209,7 @@ func runTestPrepareResultFieldType(t *C) {
 }
 
 func runTestSpecialType(t *C) {
-	runTestsOnNewDB(t, nil, "SpecialType", func(dbt *DBTest) {
+	runTestsOnNewDB(t, "SpecialType", func(dbt *DBTest) {
 		dbt.mustExec("create table test (a decimal(10, 5), b datetime, c time)")
 		dbt.mustExec("insert test values (1.4, '2012-12-21 12:12:12', '4:23:34')")
 		rows := dbt.mustQuery("select * from test where a > ?", 0)
@@ -251,43 +224,8 @@ func runTestSpecialType(t *C) {
 	})
 }
 
-func runTestClientWithCollation(t *C) {
-	runTests(t, func(config *mysql.Config) {
-		config.Collation = "utf8mb4_general_ci"
-	}, func(dbt *DBTest) {
-		var name, charset, collation string
-		// check session variable collation_connection
-		rows := dbt.mustQuery("show variables like 'collation_connection'")
-		t.Assert(rows.Next(), IsTrue)
-		err := rows.Scan(&name, &collation)
-		t.Assert(err, IsNil)
-		t.Assert(collation, Equals, "utf8mb4_general_ci")
-
-		// check session variable character_set_client
-		rows = dbt.mustQuery("show variables like 'character_set_client'")
-		t.Assert(rows.Next(), IsTrue)
-		err = rows.Scan(&name, &charset)
-		t.Assert(err, IsNil)
-		t.Assert(charset, Equals, "utf8mb4")
-
-		// check session variable character_set_results
-		rows = dbt.mustQuery("show variables like 'character_set_results'")
-		t.Assert(rows.Next(), IsTrue)
-		err = rows.Scan(&name, &charset)
-		t.Assert(err, IsNil)
-		t.Assert(charset, Equals, "utf8mb4")
-
-		// check session variable character_set_connection
-		rows = dbt.mustQuery("show variables like 'character_set_connection'")
-		t.Assert(rows.Next(), IsTrue)
-		err = rows.Scan(&name, &charset)
-		t.Assert(err, IsNil)
-		t.Assert(charset, Equals, "utf8mb4")
-	})
-}
-
 func runTestPreparedString(t *C) {
-	runTestsOnNewDB(t, nil, "PreparedString", func(dbt *DBTest) {
+	runTestsOnNewDB(t, "PreparedString", func(dbt *DBTest) {
 		dbt.mustExec("create table test (a char(10), b char(10))")
 		dbt.mustExec("insert test values (?, ?)", "abcdeabcde", "abcde")
 		rows := dbt.mustQuery("select * from test where 1 = ?", 1)
@@ -300,7 +238,7 @@ func runTestPreparedString(t *C) {
 	})
 }
 
-func runTestLoadData(c *C, server *Server) {
+func runTestLoadData(c *C) {
 	// create a file and write data.
 	path := "/tmp/load_data_test.csv"
 	fp, err := os.Create(path)
@@ -312,27 +250,24 @@ func runTestLoadData(c *C, server *Server) {
 		err = os.Remove(path)
 		c.Assert(err, IsNil)
 	}()
-	_, err = fp.WriteString("\n" +
-		"xxx row1_col1	- row1_col2	1abc\n" +
-		"xxx row2_col1	- row2_col2	\n" +
-		"xxxy row3_col1	- row3_col2	\n" +
-		"xxx row4_col1	- 		900\n" +
-		"xxx row5_col1	- 	row5_col3")
+	_, err = fp.WriteString(`
+xxx row1_col1	- row1_col2	1abc
+xxx row2_col1	- row2_col2	
+xxxy row3_col1	- row3_col2	
+xxx row4_col1	- 		900
+xxx row5_col1	- 	row5_col3`)
 	c.Assert(err, IsNil)
 
 	// support ClientLocalFiles capability
-	runTestsOnNewDB(c, func(config *mysql.Config) {
-		config.AllowAllFiles = true
-		config.Strict = false
-	}, "LoadData", func(dbt *DBTest) {
+	runTests(c, dsn+"&allowAllFiles=true", func(dbt *DBTest) {
 		dbt.mustExec("create table test (a varchar(255), b varchar(255) default 'default value', c int not null auto_increment, primary key(c))")
-		rs, err1 := dbt.db.Exec("load data local infile '/tmp/load_data_test.csv' into table test")
-		dbt.Assert(err1, IsNil)
-		lastID, err1 := rs.LastInsertId()
-		dbt.Assert(err1, IsNil)
+		rs, err := dbt.db.Exec("load data local infile '/tmp/load_data_test.csv' into table test")
+		dbt.Assert(err, IsNil)
+		lastID, err := rs.LastInsertId()
+		dbt.Assert(err, IsNil)
 		dbt.Assert(lastID, Equals, int64(1))
-		affectedRows, err1 := rs.RowsAffected()
-		dbt.Assert(err1, IsNil)
+		affectedRows, err := rs.RowsAffected()
+		dbt.Assert(err, IsNil)
 		dbt.Assert(affectedRows, Equals, int64(5))
 		var (
 			a  string
@@ -432,36 +367,32 @@ func runTestLoadData(c *C, server *Server) {
 	})
 
 	// unsupport ClientLocalFiles capability
-	server.capability ^= tmysql.ClientLocalFiles
-	runTestsOnNewDB(c, func(config *mysql.Config) {
-		config.AllowAllFiles = true
-	}, "LoadData", func(dbt *DBTest) {
+	defaultCapability ^= tmysql.ClientLocalFiles
+	runTests(c, dsn+"&allowAllFiles=true", func(dbt *DBTest) {
 		dbt.mustExec("create table test (a varchar(255), b varchar(255) default 'default value', c int not null auto_increment, primary key(c))")
 		_, err = dbt.db.Exec("load data local infile '/tmp/load_data_test.csv' into table test")
 		dbt.Assert(err, NotNil)
 		checkErrorCode(c, err, tmysql.ErrNotAllowedCommand)
 	})
-	server.capability |= tmysql.ClientLocalFiles
+	defaultCapability |= tmysql.ClientLocalFiles
 }
 
 func runTestConcurrentUpdate(c *C) {
-	// TODO: Should be runTestsOnNewDB. See #4205.
-	runTests(c, nil, func(dbt *DBTest) {
-		dbt.mustExec("drop table if exists test2")
-		dbt.mustExec("create table test2 (a int, b int)")
-		dbt.mustExec("insert test2 values (1, 1)")
+	runTests(c, dsn, func(dbt *DBTest) {
+		dbt.mustExec("create table test (a int, b int)")
+		dbt.mustExec("insert test values (1, 1)")
 		txn1, err := dbt.db.Begin()
 		c.Assert(err, IsNil)
 
 		txn2, err := dbt.db.Begin()
 		c.Assert(err, IsNil)
 
-		_, err = txn2.Exec("update test2 set a = a + 1 where b = 1")
+		_, err = txn2.Exec("update test set a = a + 1 where b = 1")
 		c.Assert(err, IsNil)
 		err = txn2.Commit()
 		c.Assert(err, IsNil)
 
-		_, err = txn1.Exec("update test2 set a = a + 1 where b = 1")
+		_, err = txn1.Exec("update test set a = a + 1 where b = 1")
 		c.Assert(err, IsNil)
 
 		err = txn1.Commit()
@@ -470,7 +401,7 @@ func runTestConcurrentUpdate(c *C) {
 }
 
 func runTestErrorCode(c *C) {
-	runTestsOnNewDB(c, nil, "ErrorCode", func(dbt *DBTest) {
+	runTests(c, dsn, func(dbt *DBTest) {
 		dbt.mustExec("create table test (c int PRIMARY KEY);")
 		dbt.mustExec("insert into test values (1);")
 		txn1, err := dbt.db.Begin()
@@ -531,105 +462,43 @@ func checkErrorCode(c *C, e error, code uint16) {
 }
 
 func runTestAuth(c *C) {
-	runTests(c, nil, func(dbt *DBTest) {
-		dbt.mustExec(`CREATE USER 'authtest'@'%' IDENTIFIED BY '123';`)
-		dbt.mustExec(`FLUSH PRIVILEGES;`)
+	runTests(c, dsn, func(dbt *DBTest) {
+		dbt.mustExec(`CREATE USER 'test'@'%' IDENTIFIED BY '123';`)
 	})
-	runTests(c, func(config *mysql.Config) {
-		config.User = "authtest"
-		config.Passwd = "123"
-	}, func(dbt *DBTest) {
+	newDsn := "test:123@tcp(localhost:4001)/test?strict=true"
+	runTests(c, newDsn, func(dbt *DBTest) {
 		dbt.mustExec(`USE mysql;`)
 	})
 
-	db, err := sql.Open("mysql", getDSN(func(config *mysql.Config) {
-		config.User = "authtest"
-		config.Passwd = "456"
-	}))
+	db, err := sql.Open("mysql", "test:456@tcp(localhost:4001)/test?strict=true")
 	_, err = db.Query("USE mysql;")
 	c.Assert(err, NotNil, Commentf("Wrong password should be failed"))
 	db.Close()
 
 	// Test login use IP that not exists in mysql.user.
-	runTests(c, nil, func(dbt *DBTest) {
-		dbt.mustExec(`CREATE USER 'authtest2'@'localhost' IDENTIFIED BY '123';`)
-		dbt.mustExec(`FLUSH PRIVILEGES;`)
+	runTests(c, dsn, func(dbt *DBTest) {
+		dbt.mustExec(`CREATE USER 'xxx'@'localhost' IDENTIFIED BY 'yyy';`)
 	})
-	runTests(c, func(config *mysql.Config) {
-		config.User = "authtest2"
-		config.Passwd = "123"
-	}, func(dbt *DBTest) {
+	newDsn = "xxx:yyy@tcp(127.0.0.1:4001)/test?strict=true"
+	runTests(c, newDsn, func(dbt *DBTest) {
 		dbt.mustExec(`USE mysql;`)
 	})
 }
 
-func runTestIssue3662(c *C) {
-	db, err := sql.Open("mysql", getDSN(func(config *mysql.Config) {
-		config.DBName = "non_existing_schema"
-	}))
+func runTestIssues(c *C) {
+	// For issue #263
+	unExistsSchemaDsn := "root@tcp(localhost:4001)/unexists_schema?strict=true"
+	db, err := sql.Open("mysql", unExistsSchemaDsn)
+	c.Assert(db, NotNil)
 	c.Assert(err, IsNil)
-	defer db.Close()
-
-	// According to documentation, "Open may just validate its arguments without
-	// creating a connection to the database. To verify that the data source name
-	// is valid, call Ping."
+	// Open may just validate its arguments without creating a connection to the database. To verify that the data source name is valid, call Ping.
 	err = db.Ping()
-	c.Assert(err, NotNil)
-	c.Assert(err.Error(), Equals, "Error 1049: Unknown database 'non_existing_schema'")
-}
-
-func runTestIssue3680(c *C) {
-	db, err := sql.Open("mysql", getDSN(func(config *mysql.Config) {
-		config.User = "non_existing_user"
-	}))
-	c.Assert(err, IsNil)
-	defer db.Close()
-
-	// According to documentation, "Open may just validate its arguments without
-	// creating a connection to the database. To verify that the data source name
-	// is valid, call Ping."
-	err = db.Ping()
-	c.Assert(err, NotNil)
-	c.Assert(err.Error(), Equals, "Error 1045: Access denied for user 'non_existing_user'@'127.0.0.1' (using password: YES)")
-}
-
-func runTestIssue3682(c *C) {
-	runTests(c, nil, func(dbt *DBTest) {
-		dbt.mustExec(`CREATE USER 'issue3682'@'%' IDENTIFIED BY '123';`)
-		dbt.mustExec(`FLUSH PRIVILEGES;`)
-	})
-	runTests(c, func(config *mysql.Config) {
-		config.User = "issue3682"
-		config.Passwd = "123"
-	}, func(dbt *DBTest) {
-		dbt.mustExec(`USE mysql;`)
-	})
-	db, err := sql.Open("mysql", getDSN(func(config *mysql.Config) {
-		config.User = "issue3682"
-		config.Passwd = "wrong_password"
-		config.DBName = "non_existing_schema"
-	}))
-	c.Assert(err, IsNil)
-	defer db.Close()
-	err = db.Ping()
-	c.Assert(err, NotNil)
-	c.Assert(err.Error(), Equals, "Error 1045: Access denied for user 'issue3682'@'127.0.0.1' (using password: YES)")
-}
-
-func runTestDBNameEscape(c *C) {
-	runTests(c, nil, func(dbt *DBTest) {
-		dbt.mustExec("CREATE DATABASE `aa-a`;")
-	})
-	runTests(c, func(config *mysql.Config) {
-		config.DBName = "aa-a"
-	}, func(dbt *DBTest) {
-		dbt.mustExec(`USE mysql;`)
-		dbt.mustExec("DROP DATABASE `aa-a`")
-	})
+	c.Assert(err, NotNil, Commentf("Connecting to an unexists schema should be error"))
+	db.Close()
 }
 
 func runTestResultFieldTableIsNull(c *C) {
-	runTestsOnNewDB(c, nil, "ResultFieldTableIsNull", func(dbt *DBTest) {
+	runTestsOnNewDB(c, "ResultFieldTableIsNull", func(dbt *DBTest) {
 		dbt.mustExec("drop table if exists test;")
 		dbt.mustExec("create table test (c int);")
 		dbt.mustExec("explain select * from test;")
@@ -649,7 +518,7 @@ func runTestStatusAPI(c *C) {
 }
 
 func runTestMultiStatements(c *C) {
-	runTestsOnNewDB(c, nil, "MultiStatements", func(dbt *DBTest) {
+	runTestsOnNewDB(c, "MultiStatements", func(dbt *DBTest) {
 		// Create Table
 		dbt.mustExec("CREATE TABLE `test` (`id` int(11) NOT NULL, `value` int(11) NOT NULL) ")
 
@@ -682,7 +551,7 @@ func runTestMultiStatements(c *C) {
 }
 
 func runTestStmtCount(t *C) {
-	runTestsOnNewDB(t, nil, "StatementCount", func(dbt *DBTest) {
+	runTests(t, dsn, func(dbt *DBTest) {
 		originStmtCnt := getStmtCnt(string(getMetrics(t)))
 
 		dbt.mustExec("create table test (a int)")
@@ -715,14 +584,6 @@ func runTestStmtCount(t *C) {
 	})
 }
 
-func runTestTLSConnection(t *C, overrider configOverrider) error {
-	db, err := sql.Open("mysql", getDSN(overrider))
-	t.Assert(err, IsNil)
-	defer db.Close()
-	_, err = db.Exec("USE test")
-	return err
-}
-
 func getMetrics(t *C) []byte {
 	resp, err := http.Get("http://127.0.0.1:10090/metrics")
 	t.Assert(err, IsNil)
@@ -745,12 +606,12 @@ func getStmtCnt(content string) (stmtCnt map[string]int) {
 
 const retryTime = 100
 
-func waitUntilServerOnline(statusPort int) {
+func waitUntilServerOnline(statusAddr string) {
 	// connect server
 	retry := 0
 	for ; retry < retryTime; retry++ {
 		time.Sleep(time.Millisecond * 10)
-		db, err := sql.Open("mysql", getDSN())
+		db, err := sql.Open("mysql", dsn)
 		if err == nil {
 			db.Close()
 			break
@@ -760,7 +621,7 @@ func waitUntilServerOnline(statusPort int) {
 		log.Fatalf("Failed to connect db for %d retries in every 10 ms", retryTime)
 	}
 	// connect http status
-	statusURL := fmt.Sprintf("http://127.0.0.1:%d/status", statusPort)
+	statusURL := fmt.Sprintf("http://127.0.0.1%s/status", statusAddr)
 	for retry = 0; retry < retryTime; retry++ {
 		resp, err := http.Get(statusURL)
 		if err == nil {

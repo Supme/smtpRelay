@@ -27,33 +27,23 @@ import (
 	"github.com/pingcap/tidb/util/types"
 )
 
+// Error instances.
+var (
+	ErrSyntax = terror.ClassParser.New(CodeSyntaxErr, "syntax error")
+)
+
+// Error codes.
 const (
-	codeErrParse  = terror.ErrCode(mysql.ErrParse)
-	codeErrSyntax = terror.ErrCode(mysql.ErrSyntax)
+	CodeSyntaxErr terror.ErrCode = 1
 )
 
 var (
-	// ErrSyntax returns for sql syntax error.
-	ErrSyntax = terror.ClassParser.New(codeErrSyntax, mysql.MySQLErrName[mysql.ErrSyntax])
-	// ErrParse returns for sql parse error.
-	ErrParse = terror.ClassParser.New(codeErrParse, mysql.MySQLErrName[mysql.ErrParse])
-	// SpecFieldPattern special result field pattern
-	SpecFieldPattern = regexp.MustCompile(`(\/\*!(M?[0-9]{5,6})?|\*\/)`)
-	specCodePattern  = regexp.MustCompile(`\/\*!(M?[0-9]{5,6})?([^*]|\*+[^*/])*\*+\/`)
-	specCodeStart    = regexp.MustCompile(`^\/\*!(M?[0-9]{5,6})?[ \t]*`)
-	specCodeEnd      = regexp.MustCompile(`[ \t]*\*\/$`)
+	specCodePattern = regexp.MustCompile(`\/\*!(M?[0-9]{5,6})?([^*]|\*+[^*/])*\*+\/`)
+	specCodeStart   = regexp.MustCompile(`^\/\*!(M?[0-9]{5,6} )?[ \t]*`)
+	specCodeEnd     = regexp.MustCompile(`[ \t]*\*\/$`)
 )
 
-func init() {
-	parserMySQLErrCodes := map[terror.ErrCode]uint16{
-		codeErrSyntax: mysql.ErrSyntax,
-		codeErrParse:  mysql.ErrParse,
-	}
-	terror.ErrClassToMySQLCodes[terror.ClassParser] = parserMySQLErrCodes
-}
-
-// TrimComment trim comment for special comment code of MySQL.
-func TrimComment(txt string) string {
+func trimComment(txt string) string {
 	txt = specCodeStart.ReplaceAllString(txt, "")
 	return specCodeEnd.ReplaceAllString(txt, "")
 }
@@ -130,14 +120,6 @@ func (parser *Parser) SetSQLMode(mode mysql.SQLMode) {
 	parser.lexer.SetSQLMode(mode)
 }
 
-// ParseErrorWith returns "You have a syntax error near..." error message compatible with mysql.
-func ParseErrorWith(errstr string, lineno int) *terror.Error {
-	if len(errstr) > mysql.ErrTextLength {
-		errstr = errstr[:mysql.ErrTextLength]
-	}
-	return ErrParse.GenByArgs(mysql.MySQLErrName[mysql.ErrSyntax], errstr, lineno)
-}
-
 // The select statement is not at the end of the whole statement, if the last
 // field text was set from its offset to the end of the src string, update
 // the last field text.
@@ -163,18 +145,6 @@ func (parser *Parser) endOffset(v *yySymType) int {
 func toInt(l yyLexer, lval *yySymType, str string) int {
 	n, err := strconv.ParseUint(str, 10, 64)
 	if err != nil {
-		e := err.(*strconv.NumError)
-		if e.Err == strconv.ErrRange {
-			// TODO: toDecimal maybe out of range still.
-			// This kind of error should be throw to higher level, because truncated data maybe legal.
-			// For example, this SQL returns error:
-			// create table test (id decimal(30, 0));
-			// insert into test values(123456789012345678901234567890123094839045793405723406801943850);
-			// While this SQL:
-			// select 1234567890123456789012345678901230948390457934057234068019438509023041874359081325875128590860234789847359871045943057;
-			// get value 99999999999999999999999999999999999999999999999999999999999999999
-			return toDecimal(l, lval, str)
-		}
 		l.Errorf("integer literal: %v", err)
 		return int(unicode.ReplacementChar)
 	}
@@ -183,7 +153,7 @@ func toInt(l yyLexer, lval *yySymType, str string) int {
 	case n < math.MaxInt64:
 		lval.item = int64(n)
 	default:
-		lval.item = n
+		lval.item = uint64(n)
 	}
 	return intLit
 }
@@ -205,16 +175,22 @@ func toFloat(l yyLexer, lval *yySymType, str string) int {
 		return int(unicode.ReplacementChar)
 	}
 
-	lval.item = n
+	lval.item = float64(n)
 	return floatLit
 }
 
 // See https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html
 func toHex(l yyLexer, lval *yySymType, str string) int {
-	h, err := types.NewHexLiteral(str)
+	h, err := types.ParseHex(str)
 	if err != nil {
-		l.Errorf("hex literal: %v", err)
-		return int(unicode.ReplacementChar)
+		// If parse hexadecimal literal to numerical value error, we should treat it as a string.
+		hexStr, err1 := types.ParseHexStr(str)
+		if err1 != nil {
+			l.Errorf("hex literal: %v", err)
+			return int(unicode.ReplacementChar)
+		}
+		lval.item = hexStr
+		return hexLit
 	}
 	lval.item = h
 	return hexLit
@@ -222,7 +198,7 @@ func toHex(l yyLexer, lval *yySymType, str string) int {
 
 // See https://dev.mysql.com/doc/refman/5.7/en/bit-type.html
 func toBit(l yyLexer, lval *yySymType, str string) int {
-	b, err := types.NewBitLiteral(str)
+	b, err := types.ParseBit(str, -1)
 	if err != nil {
 		l.Errorf("bit literal: %v", err)
 		return int(unicode.ReplacementChar)
@@ -236,7 +212,7 @@ func getUint64FromNUM(num interface{}) uint64 {
 	case int64:
 		return uint64(v)
 	case uint64:
-		return v
+		return uint64(v)
 	}
 	return 0
 }

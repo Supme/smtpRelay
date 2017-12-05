@@ -14,15 +14,18 @@
 package executor_test
 
 import (
-	"github.com/juju/errors"
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/executor"
 	"github.com/pingcap/tidb/plan"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/testkit"
+	"github.com/pingcap/tidb/util/testleak"
 )
 
 func (s *testSuite) TestPrepared(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists prepare_test")
@@ -44,17 +47,13 @@ func (s *testSuite) TestPrepared(c *C) {
 	_, err = tk.Exec("deallocate prepare stmt_test_5")
 	c.Assert(executor.ErrStmtNotFound.Equal(err), IsTrue)
 
-	// incorrect SQLs in prepare. issue #3738, SQL in prepare stmt is parsed in DoPrepare.
-	_, err = tk.Exec(`prepare p from "delete from t where a = 7 or 1=1/*' and b = 'p'";`)
-	c.Assert(terror.ErrorEqual(err, errors.New(`[parser:1064]You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '/*' and b = 'p'' at line 1`)), IsTrue)
-
 	// The `stmt_test5` should not be found.
 	_, err = tk.Exec(`set @a = 1; execute stmt_test_5 using @a;`)
 	c.Assert(executor.ErrStmtNotFound.Equal(err), IsTrue)
 
 	// Use parameter marker with argument will run prepared statement.
 	result := tk.MustQuery("select distinct c1, c2 from prepare_test where c1 = ?", 1)
-	result.Check(testkit.Rows("1 <nil>"))
+	result.Check([][]interface{}{{1, nil}})
 
 	// Call Session PrepareStmt directly to get stmtId.
 	query := "select c1, c2 from prepare_test where c1 = ?"
@@ -66,16 +65,6 @@ func (s *testSuite) TestPrepared(c *C) {
 	// Check that ast.Statement created by executor.CompileExecutePreparedStmt has query text.
 	stmt := executor.CompileExecutePreparedStmt(tk.Se, stmtId, 1)
 	c.Assert(stmt.OriginText(), Equals, query)
-
-	// Check that rebuild plan works.
-	tk.Se.PrepareTxnCtx()
-	err = stmt.RebuildPlan()
-	c.Assert(err, IsNil)
-	rs, err := stmt.Exec(tk.Se)
-	c.Assert(err, IsNil)
-	_, err = rs.Next()
-	c.Assert(err, IsNil)
-	c.Assert(rs.Close(), IsNil)
 
 	// Make schema change.
 	tk.Exec("create table prepare2 (a int)")
@@ -91,12 +80,6 @@ func (s *testSuite) TestPrepared(c *C) {
 	_, err = tk.Se.ExecutePreparedStmt(stmtId, 1)
 	c.Assert(executor.ErrSchemaChanged.Equal(err), IsTrue)
 
-	// issue 3381
-	tk.MustExec("create table prepare3 (a decimal(1))")
-	tk.MustExec("prepare stmt from 'insert into prepare3 value(123)'")
-	_, err = tk.Exec("execute stmt")
-	c.Assert(err, NotNil)
-
 	// Coverage.
 	exec := &executor.ExecuteExec{}
 	exec.Next()
@@ -104,6 +87,10 @@ func (s *testSuite) TestPrepared(c *C) {
 }
 
 func (s *testSuite) TestPreparedLimitOffset(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists prepare_test")

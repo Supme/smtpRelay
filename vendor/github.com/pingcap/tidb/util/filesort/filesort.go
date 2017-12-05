@@ -27,7 +27,6 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/sessionctx/variable"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/types"
 )
@@ -43,7 +42,7 @@ type item struct {
 	value *comparableRow
 }
 
-// rowHeap maintains a min-heap property of comparableRows.
+// Min-heap of comparableRows
 type rowHeap struct {
 	sc     *variable.StatementContext
 	ims    []*item
@@ -58,7 +57,7 @@ func lessThan(sc *variable.StatementContext, i []types.Datum, j []types.Datum, b
 		v1 := i[k]
 		v2 := j[k]
 
-		ret, err := v1.CompareDatum(sc, &v2)
+		ret, err := v1.CompareDatum(sc, v2)
 		if err != nil {
 			return false, errors.Trace(err)
 		}
@@ -93,12 +92,12 @@ func (rh *rowHeap) Less(i, j int) bool {
 	return ret
 }
 
-// Push pushes an element into rowHeap.
+// Push implements heap.Interface Push interface.
 func (rh *rowHeap) Push(x interface{}) {
 	rh.ims = append(rh.ims, x.(*item))
 }
 
-// Pop pops the last element from rowHeap.
+// Push implements heap.Interface Pop interface.
 func (rh *rowHeap) Pop() interface{} {
 	old := rh.ims
 	n := len(old)
@@ -296,7 +295,7 @@ func (fs *FileSorter) closeAllFiles() error {
 	return nil
 }
 
-// internalSort performs full in-memory sort.
+// Perform full in-memory sort.
 func (fs *FileSorter) internalSort() (*comparableRow, error) {
 	w := fs.workers[fs.cWorker]
 
@@ -315,7 +314,7 @@ func (fs *FileSorter) internalSort() (*comparableRow, error) {
 	return nil, nil
 }
 
-// externalSort performs external file sort.
+// Perform external file sort.
 func (fs *FileSorter) externalSort() (*comparableRow, error) {
 	if !fs.fetched {
 		// flush all remaining content to file (if any)
@@ -385,12 +384,12 @@ func (fs *FileSorter) externalSort() (*comparableRow, error) {
 			return nil, errors.Trace(err)
 		}
 		if row != nil {
-			nextIm := &item{
+			im := &item{
 				index: im.index,
 				value: row,
 			}
 
-			heap.Push(fs.rowHeap, nextIm)
+			heap.Push(fs.rowHeap, im)
 			if fs.rowHeap.err != nil {
 				return nil, errors.Trace(fs.rowHeap.err)
 			}
@@ -413,7 +412,7 @@ func (fs *FileSorter) openAllFiles() error {
 	return nil
 }
 
-// fetchNextRow fetches the next row given the source file index.
+// Fetch the next row given the source file index.
 func (fs *FileSorter) fetchNextRow(index int) (*comparableRow, error) {
 	n, err := fs.fds[index].Read(fs.head)
 	if err == io.EOF {
@@ -484,7 +483,7 @@ func (fs *FileSorter) Input(key []types.Datum, val []types.Datum, handle int64) 
 			// all workers are busy now, cooldown and retry
 			time.Sleep(cooldownTime)
 		}
-		if time.Since(origin) >= abortTime {
+		if time.Now().Sub(origin) >= abortTime {
 			// weird: all workers are busy for at least 1 min
 			// choose to abort for safety
 			return errors.New("can not make progress since all workers are busy")
@@ -560,7 +559,7 @@ func (w *Worker) input(row *comparableRow) {
 	}
 }
 
-// flushToFile flushes the buffer to file if it is full.
+// Flush the buffer to file if it is full.
 func (w *Worker) flushToFile() {
 	defer w.ctx.wg.Done()
 	var (
@@ -580,7 +579,7 @@ func (w *Worker) flushToFile() {
 		w.err = errors.Trace(err)
 		return
 	}
-	defer terror.Call(outputFile.Close)
+	defer outputFile.Close()
 
 	for _, row := range w.buf {
 		prevLen = len(outputByte)

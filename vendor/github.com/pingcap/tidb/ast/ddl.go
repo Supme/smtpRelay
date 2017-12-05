@@ -234,12 +234,15 @@ const (
 	ColumnOptionNotNull
 	ColumnOptionAutoIncrement
 	ColumnOptionDefaultValue
+	ColumnOptionUniq
+	ColumnOptionIndex
+	ColumnOptionUniqIndex
+	ColumnOptionKey
 	ColumnOptionUniqKey
 	ColumnOptionNull
 	ColumnOptionOnUpdate // For Timestamp and Datetime only.
 	ColumnOptionFulltext
 	ColumnOptionComment
-	ColumnOptionGenerated
 )
 
 // ColumnOption is used for parsing column constraint info from SQL.
@@ -247,11 +250,8 @@ type ColumnOption struct {
 	node
 
 	Tp ColumnOptionType
-	// For ColumnOptionDefaultValue or ColumnOptionOnUpdate, it's the target value.
-	// For ColumnOptionGenerated, it's the target expression.
+	// The value For Default or On Update.
 	Expr ExprNode
-	// Stored is only for ColumnOptionGenerated, default is false.
-	Stored bool
 }
 
 // Accept implements Node Accept interface.
@@ -318,11 +318,14 @@ type Constraint struct {
 	Tp   ConstraintType
 	Name string
 
-	Keys []*IndexColName // Used for PRIMARY KEY, UNIQUE, ......
+	// Used for PRIMARY KEY, UNIQUE, ......
+	Keys []*IndexColName
 
-	Refer *ReferenceDef // Used for foreign key.
+	// Used for foreign key.
+	Refer *ReferenceDef
 
-	Option *IndexOption // Index Options
+	// Index Options
+	Option *IndexOption
 }
 
 // Accept implements Node Accept interface.
@@ -469,9 +472,6 @@ type RenameTableStmt struct {
 
 	OldTable *TableName
 	NewTable *TableName
-	// TODO: Refactor this when you are going to add full support for multiple schema changes.
-	// Currently it is only useful for syncer which depends heavily on tidb parser to do some dirty work.
-	TableToTables []*TableToTable
 }
 
 // Accept implements Node Accept interface.
@@ -481,42 +481,6 @@ func (n *RenameTableStmt) Accept(v Visitor) (Node, bool) {
 		return v.Leave(newNode)
 	}
 	n = newNode.(*RenameTableStmt)
-	node, ok := n.OldTable.Accept(v)
-	if !ok {
-		return n, false
-	}
-	n.OldTable = node.(*TableName)
-	node, ok = n.NewTable.Accept(v)
-	if !ok {
-		return n, false
-	}
-	n.NewTable = node.(*TableName)
-
-	for i, t := range n.TableToTables {
-		node, ok := t.Accept(v)
-		if !ok {
-			return n, false
-		}
-		n.TableToTables[i] = node.(*TableToTable)
-	}
-
-	return v.Leave(n)
-}
-
-// TableToTable represents renaming old table to new table used in RenameTableStmt.
-type TableToTable struct {
-	node
-	OldTable *TableName
-	NewTable *TableName
-}
-
-// Accept implements Node Accept interface.
-func (n *TableToTable) Accept(v Visitor) (Node, bool) {
-	newNode, skipChildren := v.Enter(n)
-	if skipChildren {
-		return v.Leave(newNode)
-	}
-	n = newNode.(*TableToTable)
 	node, ok := n.OldTable.Accept(v)
 	if !ok {
 		return n, false
@@ -539,7 +503,6 @@ type CreateIndexStmt struct {
 	Table         *TableName
 	Unique        bool
 	IndexColNames []*IndexColName
-	IndexOption   *IndexOption
 }
 
 // Accept implements Node Accept interface.
@@ -560,13 +523,6 @@ func (n *CreateIndexStmt) Accept(v Visitor) (Node, bool) {
 			return n, false
 		}
 		n.IndexColNames[i] = node.(*IndexColName)
-	}
-	if n.IndexOption != nil {
-		node, ok := n.IndexOption.Accept(v)
-		if !ok {
-			return n, false
-		}
-		n.IndexOption = node.(*IndexOption)
 	}
 	return v.Leave(n)
 }
@@ -650,7 +606,7 @@ const (
 // ColumnPosition represent the position of the newly added column
 type ColumnPosition struct {
 	node
-	// Tp is either ColumnPositionNone, ColumnPositionFirst or ColumnPositionAfter.
+	// ColumnPositionNone | ColumnPositionFirst | ColumnPositionAfter
 	Tp ColumnPositionType
 	// RelativeColumn is the column the newly added column after if type is ColumnPositionAfter
 	RelativeColumn *ColumnName
@@ -694,18 +650,6 @@ const (
 // TODO: Add more actions
 )
 
-// LockType is the type for AlterTableSpec.
-// See https://dev.mysql.com/doc/refman/5.7/en/alter-table.html#alter-table-concurrency
-type LockType byte
-
-// Lock Types.
-const (
-	LockTypeNone LockType = iota + 1
-	LockTypeDefault
-	LockTypeShared
-	LockTypeExclusive
-)
-
 // AlterTableSpec represents alter table specification.
 type AlterTableSpec struct {
 	node
@@ -718,7 +662,6 @@ type AlterTableSpec struct {
 	NewColumn     *ColumnDef
 	OldColumnName *ColumnName
 	Position      *ColumnPosition
-	LockType      LockType
 }
 
 // Accept implements Node Accept interface.

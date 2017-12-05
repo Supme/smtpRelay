@@ -32,14 +32,6 @@ type testSuite struct {
 	db engine.DB
 }
 
-func (s *testSuite) SetUpSuite(c *C) {
-	testleak.BeforeTest()
-}
-
-func (s *testSuite) TearDownSuite(c *C) {
-	testleak.AfterTest(c)()
-}
-
 func (s *testSuite) SetUpTest(c *C) {
 	var (
 		d   MemoryDriver
@@ -54,6 +46,7 @@ func (s *testSuite) TearDownTest(c *C) {
 }
 
 func (s *testSuite) TestGetSet(c *C) {
+	defer testleak.AfterTest(c)()
 	db := s.db
 
 	b := db.NewBatch()
@@ -83,6 +76,7 @@ func (s *testSuite) TestGetSet(c *C) {
 }
 
 func (s *testSuite) TestSeek(c *C) {
+	defer testleak.AfterTest(c)()
 	b := s.db.NewBatch()
 	b.Put([]byte("a"), []byte("1"))
 	b.Put([]byte("b"), []byte("2"))
@@ -116,6 +110,7 @@ func (s *testSuite) TestSeek(c *C) {
 }
 
 func (s *testSuite) TestPrevSeek(c *C) {
+	defer testleak.AfterTest(c)()
 	b := s.db.NewBatch()
 	b.Put([]byte("b"), []byte("1"))
 	b.Put([]byte("c"), []byte("2"))

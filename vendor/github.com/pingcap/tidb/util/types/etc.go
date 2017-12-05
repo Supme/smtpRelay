@@ -50,11 +50,6 @@ func IsTypeVarchar(tp byte) bool {
 	return tp == mysql.TypeVarString || tp == mysql.TypeVarchar
 }
 
-// IsTypeJSON returns a boolean indicating whether the tp is the JSON type.
-func IsTypeJSON(tp byte) bool {
-	return tp == mysql.TypeJSON
-}
-
 // IsTypePrefixable returns a boolean indicating
 // whether an index on a column with the tp can be defined with a prefix.
 func IsTypePrefixable(tp byte) bool {
@@ -65,36 +60,6 @@ func IsTypePrefixable(tp byte) bool {
 // whether the tp can has time fraction.
 func IsTypeFractionable(tp byte) bool {
 	return tp == mysql.TypeDatetime || tp == mysql.TypeDuration || tp == mysql.TypeTimestamp
-}
-
-// IsTypeTime returns a boolean indicating
-// whether the tp is time type like datetime, date or timestamp.
-func IsTypeTime(tp byte) bool {
-	return tp == mysql.TypeDatetime || tp == mysql.TypeDate || tp == mysql.TypeNewDate || tp == mysql.TypeTimestamp
-}
-
-// IsTemporalWithDate returns a boolean indicating
-// whether the tp is time type with date.
-func IsTemporalWithDate(tp byte) bool {
-	return IsTypeTime(tp)
-}
-
-// IsBinaryStr returns a boolean indicating
-// whether the field type is a binary string type.
-func IsBinaryStr(ft *FieldType) bool {
-	if ft.Collate == charset.CollationBin && (IsTypeChar(ft.Tp) || IsTypeBlob(ft.Tp) || IsTypeVarchar(ft.Tp)) {
-		return true
-	}
-	return false
-}
-
-// IsNonBinaryStr returns a boolean indicating
-// whether the field type is a non-binary string type.
-func IsNonBinaryStr(ft *FieldType) bool {
-	if ft.Collate != charset.CollationBin && (IsTypeChar(ft.Tp) || IsTypeBlob(ft.Tp) || IsTypeVarchar(ft.Tp)) {
-		return true
-	}
-	return false
 }
 
 var type2Str = map[byte]string{
@@ -109,7 +74,6 @@ var type2Str = map[byte]string{
 	mysql.TypeFloat:      "float",
 	mysql.TypeGeometry:   "geometry",
 	mysql.TypeInt24:      "mediumint",
-	mysql.TypeJSON:       "json",
 	mysql.TypeLong:       "int",
 	mysql.TypeLonglong:   "bigint",
 	mysql.TypeLongBlob:   "longtext",
@@ -165,17 +129,7 @@ func InvOp2(x, y interface{}, o opcode.Op) (interface{}, error) {
 	return nil, errors.Errorf("Invalid operation: %v %v %v (mismatched types %T and %T)", x, o, y, x, y)
 }
 
-// overflow returns an overflowed error.
+// Overflow returns an overflowed error.
 func overflow(v interface{}, tp byte) error {
-	return ErrOverflow.Gen("constant %v overflows %s", v, TypeStr(tp))
-}
-
-// IsTypeTemporal checks if a type is a temporal type.
-func IsTypeTemporal(tp byte) bool {
-	switch tp {
-	case mysql.TypeDuration, mysql.TypeDatetime, mysql.TypeTimestamp,
-		mysql.TypeDate, mysql.TypeNewDate:
-		return true
-	}
-	return false
+	return errors.Errorf("constant %v overflows %s", v, TypeStr(tp))
 }

@@ -14,18 +14,16 @@
 package server
 
 import (
-	"crypto/tls"
 	"fmt"
 
 	"github.com/pingcap/tidb/util"
-	"github.com/pingcap/tidb/util/auth"
 	"github.com/pingcap/tidb/util/types"
 )
 
 // IDriver opens IContext.
 type IDriver interface {
-	// OpenCtx opens an IContext with connection id, client capability, collation, dbname and optionally the tls state.
-	OpenCtx(connID uint64, capability uint32, collation uint8, dbname string, tlsState *tls.ConnectionState) (QueryCtx, error)
+	// OpenCtx opens an IContext with connection id, client capability, collation and dbname.
+	OpenCtx(connID uint64, capability uint32, collation uint8, dbname string) (QueryCtx, error)
 }
 
 // QueryCtx is the interface to execute command.
@@ -76,7 +74,7 @@ type QueryCtx interface {
 	Close() error
 
 	// Auth verifies user's authentication.
-	Auth(user *auth.UserIdentity, auth []byte, salt []byte) bool
+	Auth(user string, auth []byte, salt []byte) bool
 
 	// ShowProcess shows the information about the session.
 	ShowProcess() util.ProcessInfo

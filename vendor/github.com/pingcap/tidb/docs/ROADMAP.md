@@ -22,11 +22,8 @@ This document defines the roadmap for TiDB development.
 
 ##### __API__  
 - [x] MySQL protocol server
-- [ ] MySQL X Protocol
 - [ ] PostgreSQL protocol server
-- [x] JSON support
-- [ ] Document store
-- [x] Spark connector
+- [ ] JSON support
 
 
 ##### __Application__  

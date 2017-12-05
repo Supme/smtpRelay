@@ -58,7 +58,7 @@ type dmlNode struct {
 // dmlStatement implements DMLNode interface.
 func (dn *dmlNode) dmlStatement() {}
 
-// exprNode is the struct implements Expression interface.
+// expressionNode is the struct implements Expression interface.
 // Expression implementations should embed it in.
 type exprNode struct {
 	node
@@ -101,7 +101,7 @@ type funcNode struct {
 	exprNode
 }
 
-// functionExpression implements FunctionNode interface.
+// FunctionExpression implements FunctionNode interface.
 func (fn *funcNode) functionExpression() {}
 
 type resultSetNode struct {
@@ -113,7 +113,7 @@ func (rs *resultSetNode) GetResultFields() []*ResultField {
 	return rs.resultFields
 }
 
-// SetResultFields implements ResultSetNode interface.
+// GetResultFields implements ResultSetNode interface.
 func (rs *resultSetNode) SetResultFields(rfs []*ResultField) {
 	rs.resultFields = rfs
 }

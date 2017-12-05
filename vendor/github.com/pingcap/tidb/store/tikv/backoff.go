@@ -19,10 +19,8 @@ import (
 	"math/rand"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/terror"
+	"github.com/ngaut/log"
 	goctx "golang.org/x/net/context"
 )
 
@@ -116,40 +114,22 @@ func (t backoffType) String() string {
 	return ""
 }
 
-func (t backoffType) TError() *terror.Error {
-	switch t {
-	case boTiKVRPC:
-		return ErrTiKVServerTimeout
-	case boTxnLock, boTxnLockFast:
-		return ErrResolveLockTimeout
-	case boPDRPC:
-		return ErrPDServerTimeout
-	case boRegionMiss:
-		return ErrRegionUnavaiable
-	case boServerBusy:
-		return ErrTiKVServerBusy
-	}
-	return terror.ClassTiKV.New(mysql.ErrUnknown, mysql.MySQLErrName[mysql.ErrUnknown])
-}
-
 // Maximum total sleep time(in ms) for kv/cop commands.
 const (
 	copBuildTaskMaxBackoff  = 5000
 	tsoMaxBackoff           = 5000
-	scannerNextMaxBackoff   = 20000
-	batchGetMaxBackoff      = 20000
-	copNextMaxBackoff       = 20000
-	getMaxBackoff           = 20000
-	prewriteMaxBackoff      = 20000
-	cleanupMaxBackoff       = 20000
+	scannerNextMaxBackoff   = 15000
+	batchGetMaxBackoff      = 15000
+	copNextMaxBackoff       = 15000
+	getMaxBackoff           = 15000
+	prewriteMaxBackoff      = 15000
+	commitMaxBackoff        = 15000
+	commitPrimaryMaxBackoff = -1
+	cleanupMaxBackoff       = 15000
 	gcMaxBackoff            = 100000
 	gcResolveLockMaxBackoff = 100000
-	gcDeleteRangeMaxBackoff = 100000
-	rawkvMaxBackoff         = 20000
-	splitRegionBackoff      = 20000
+	rawkvMaxBackoff         = 15000
 )
-
-var commitMaxBackoff = 20000
 
 // Backoffer is a utility for retrying queries.
 type Backoffer struct {
@@ -169,15 +149,16 @@ func NewBackoffer(maxSleep int, ctx goctx.Context) *Backoffer {
 	}
 }
 
+// WithCancel returns a cancel function which, when called, would cancel backoffer's context.
+func (b *Backoffer) WithCancel() goctx.CancelFunc {
+	var cancel goctx.CancelFunc
+	b.ctx, cancel = goctx.WithCancel(b.ctx)
+	return cancel
+}
+
 // Backoff sleeps a while base on the backoffType and records the error message.
 // It returns a retryable error if total sleep time exceeds maxSleep.
 func (b *Backoffer) Backoff(typ backoffType, err error) error {
-	select {
-	case <-b.ctx.Done():
-		return errors.Trace(err)
-	default:
-	}
-
 	backoffCounter.WithLabelValues(typ.String()).Inc()
 	// Lazy initialize.
 	if b.fn == nil {
@@ -198,13 +179,11 @@ func (b *Backoffer) Backoff(typ backoffType, err error) error {
 		errMsg := fmt.Sprintf("backoffer.maxSleep %dms is exceeded, errors:", b.maxSleep)
 		for i, err := range b.errors {
 			// Print only last 3 errors for non-DEBUG log levels.
-			if log.GetLevel() == log.DebugLevel || i >= len(b.errors)-3 {
+			if log.GetLogLevel() >= log.LOG_LEVEL_DEBUG || i >= len(b.errors)-3 {
 				errMsg += "\n" + err.Error()
 			}
 		}
-		log.Warn(errMsg)
-		// Use the last backoff type to generate a MySQL error.
-		return typ.TError()
+		return errors.Annotate(errors.New(errMsg), txnRetryableMark)
 	}
 	return nil
 }
@@ -216,25 +195,12 @@ func (b *Backoffer) String() string {
 	return fmt.Sprintf(" backoff(%dms %s)", b.totalSleep, b.types)
 }
 
-// Clone creates a new Backoffer which keeps current Backoffer's sleep time and errors, and shares
-// current Backoffer's context.
-func (b *Backoffer) Clone() *Backoffer {
+// Fork creates a new Backoffer which keeps current Backoffer's sleep time and errors.
+func (b *Backoffer) Fork() *Backoffer {
 	return &Backoffer{
 		maxSleep:   b.maxSleep,
 		totalSleep: b.totalSleep,
 		errors:     b.errors,
 		ctx:        b.ctx,
 	}
-}
-
-// Fork creates a new Backoffer which keeps current Backoffer's sleep time and errors, and holds
-// a child context of current Backoffer's context.
-func (b *Backoffer) Fork() (*Backoffer, goctx.CancelFunc) {
-	ctx, cancel := goctx.WithCancel(b.ctx)
-	return &Backoffer{
-		maxSleep:   b.maxSleep,
-		totalSleep: b.totalSleep,
-		errors:     b.errors,
-		ctx:        ctx,
-	}, cancel
 }

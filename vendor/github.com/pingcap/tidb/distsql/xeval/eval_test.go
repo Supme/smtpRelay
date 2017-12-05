@@ -36,9 +36,9 @@ type testEvalSuite struct{}
 // TODO: add more tests.
 func (s *testEvalSuite) TestEval(c *C) {
 	colID := int64(1)
-	xevaluator := NewEvaluator(new(variable.StatementContext), time.Local)
+	xevaluator := NewEvaluator(new(variable.StatementContext))
 	xevaluator.Row[colID] = types.NewIntDatum(100)
-	tests := []struct {
+	cases := []struct {
 		expr   *tipb.Expr
 		result types.Datum
 	}{
@@ -273,11 +273,11 @@ func (s *testEvalSuite) TestEval(c *C) {
 			types.NewFloat64Datum(1.1),
 		},
 	}
-	for _, tt := range tests {
-		result, err := xevaluator.Eval(tt.expr)
+	for _, ca := range cases {
+		result, err := xevaluator.Eval(ca.expr)
 		c.Assert(err, IsNil)
-		c.Assert(result.Kind(), Equals, tt.result.Kind())
-		cmp, err := result.CompareDatum(xevaluator.StatementCtx, &tt.result)
+		c.Assert(result.Kind(), Equals, ca.result.Kind())
+		cmp, err := result.CompareDatum(xevaluator.sc, ca.result)
 		c.Assert(err, IsNil)
 		c.Assert(cmp, Equals, 0)
 	}
@@ -357,7 +357,7 @@ func notExpr(value interface{}) *tipb.Expr {
 }
 
 func (s *testEvalSuite) TestLike(c *C) {
-	tests := []struct {
+	cases := []struct {
 		expr   *tipb.Expr
 		result int64
 	}{
@@ -406,16 +406,16 @@ func (s *testEvalSuite) TestLike(c *C) {
 			result: 0,
 		},
 	}
-	ev := NewEvaluator(new(variable.StatementContext), time.Local)
-	for _, tt := range tests {
-		res, err := ev.Eval(tt.expr)
+	ev := NewEvaluator(new(variable.StatementContext))
+	for _, ca := range cases {
+		res, err := ev.Eval(ca.expr)
 		c.Check(err, IsNil)
-		c.Check(res.GetInt64(), Equals, tt.result)
+		c.Check(res.GetInt64(), Equals, ca.result)
 	}
 }
 
 func (s *testEvalSuite) TestWhereIn(c *C) {
-	tests := []struct {
+	cases := []struct {
 		expr   *tipb.Expr
 		result interface{}
 	}{
@@ -440,6 +440,10 @@ func (s *testEvalSuite) TestWhereIn(c *C) {
 			result: nil,
 		},
 		{
+			expr:   inExpr(2),
+			result: false,
+		},
+		{
 			expr:   inExpr("abc", "abc", "ab"),
 			result: true,
 		},
@@ -448,15 +452,15 @@ func (s *testEvalSuite) TestWhereIn(c *C) {
 			result: false,
 		},
 	}
-	ev := NewEvaluator(new(variable.StatementContext), time.Local)
-	for _, tt := range tests {
-		res, err := ev.Eval(tt.expr)
+	ev := NewEvaluator(new(variable.StatementContext))
+	for _, ca := range cases {
+		res, err := ev.Eval(ca.expr)
 		c.Check(err, IsNil)
-		if tt.result == nil {
+		if ca.result == nil {
 			c.Check(res.Kind(), Equals, types.KindNull)
 		} else {
 			c.Check(res.Kind(), Equals, types.KindInt64)
-			if tt.result == true {
+			if ca.result == true {
 				c.Check(res.GetInt64(), Equals, int64(1))
 			} else {
 				c.Check(res.GetInt64(), Equals, int64(0))
@@ -467,10 +471,10 @@ func (s *testEvalSuite) TestWhereIn(c *C) {
 
 func (s *testEvalSuite) TestEvalIsNull(c *C) {
 	colID := int64(1)
-	xevaluator := NewEvaluator(new(variable.StatementContext), time.Local)
+	xevaluator := NewEvaluator(new(variable.StatementContext))
 	xevaluator.Row[colID] = types.NewIntDatum(100)
 	null, trueAns, falseAns := types.Datum{}, types.NewIntDatum(1), types.NewIntDatum(0)
-	tests := []struct {
+	cases := []struct {
 		expr   *tipb.Expr
 		result types.Datum
 	}{
@@ -487,20 +491,26 @@ func (s *testEvalSuite) TestEvalIsNull(c *C) {
 			result: falseAns,
 		},
 	}
-	for _, tt := range tests {
-		result, err := xevaluator.Eval(tt.expr)
+	for _, ca := range cases {
+		result, err := xevaluator.Eval(ca.expr)
 		c.Assert(err, IsNil)
-		c.Assert(result.Kind(), Equals, tt.result.Kind())
-		cmp, err := result.CompareDatum(xevaluator.StatementCtx, &tt.result)
+		c.Assert(result.Kind(), Equals, ca.result.Kind())
+		cmp, err := result.CompareDatum(xevaluator.sc, ca.result)
 		c.Assert(err, IsNil)
 		c.Assert(cmp, Equals, 0)
 	}
 }
 
-func inExpr(list ...interface{}) *tipb.Expr {
-	listExpr := make([]*tipb.Expr, 0, len(list))
+func inExpr(target interface{}, list ...interface{}) *tipb.Expr {
+	targetDatum := types.NewDatum(target)
+	var listDatums []types.Datum
 	for _, v := range list {
-		listExpr = append(listExpr, datumExpr(types.NewDatum(v)))
+		listDatums = append(listDatums, types.NewDatum(v))
 	}
-	return &tipb.Expr{Tp: tipb.ExprType_In, Children: listExpr}
+	sc := new(variable.StatementContext)
+	types.SortDatums(sc, listDatums)
+	targetExpr := datumExpr(targetDatum)
+	val, _ := codec.EncodeValue(nil, listDatums...)
+	listExpr := &tipb.Expr{Tp: tipb.ExprType_ValueList, Val: val}
+	return &tipb.Expr{Tp: tipb.ExprType_In, Children: []*tipb.Expr{targetExpr, listExpr}}
 }

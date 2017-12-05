@@ -14,7 +14,6 @@
 package server
 
 import (
-	"crypto/tls"
 	"fmt"
 
 	"github.com/juju/errors"
@@ -23,7 +22,6 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/util"
-	"github.com/pingcap/tidb/util/auth"
 	"github.com/pingcap/tidb/util/types"
 )
 
@@ -124,18 +122,19 @@ func (ts *TiDBStatement) Close() error {
 }
 
 // OpenCtx implements IDriver.
-func (qd *TiDBDriver) OpenCtx(connID uint64, capability uint32, collation uint8, dbname string, tlsState *tls.ConnectionState) (QueryCtx, error) {
+func (qd *TiDBDriver) OpenCtx(connID uint64, capability uint32, collation uint8, dbname string) (QueryCtx, error) {
 	session, err := tidb.CreateSession(qd.store)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	session.SetTLSState(tlsState)
-	err = session.SetCollation(int(collation))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	session.SetClientCapability(capability)
 	session.SetConnectionID(connID)
+	if dbname != "" {
+		_, err = session.Execute("use " + dbname)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
 	tc := &TiDBContext{
 		session:   session,
 		currentDB: dbname,
@@ -218,13 +217,12 @@ func (tc *TiDBContext) SetClientCapability(flags uint32) {
 }
 
 // Close implements QueryCtx Close method.
-func (tc *TiDBContext) Close() error {
-	tc.session.Close()
-	return nil
+func (tc *TiDBContext) Close() (err error) {
+	return tc.session.Close()
 }
 
 // Auth implements QueryCtx Auth method.
-func (tc *TiDBContext) Auth(user *auth.UserIdentity, auth []byte, salt []byte) bool {
+func (tc *TiDBContext) Auth(user string, auth []byte, salt []byte) bool {
 	return tc.session.Auth(user, auth, salt)
 }
 
@@ -334,25 +332,12 @@ func convertColumnInfo(fld *ast.ResultField) (ci *ColumnInfo) {
 	} else {
 		ci.ColumnLength = uint32(fld.Column.Flen)
 	}
-	// Fix issue #4540.
-	// The flen is a hint, not a precise value, so most client will not use the value.
-	// But we found in race MySQL client, like Navicat for MySQL(version before 12) will truncate
-	// the `show create table` result. To fix this case, we must use a large enough flen to prevent
-	// the truncation, in MySQL, it will multiply bytes length by a multiple based on character set.
-	// For examples:
-	// * latin, the multiple is 1
-	// * gb2312, the multiple is 2
-	// * Utf-8, the multiple is 3
-	// * utf8mb4, the multiple is 4
-	// So the large enough multiple is 4 in here.
-	ci.ColumnLength = ci.ColumnLength * mysql.MaxBytesOfCharacter
-
 	if fld.Column.Decimal == types.UnspecifiedLength {
-		ci.Decimal = mysql.NotFixedDec
+		ci.Decimal = 0
 	} else {
 		ci.Decimal = uint8(fld.Column.Decimal)
 	}
-	ci.Type = fld.Column.Tp
+	ci.Type = uint8(fld.Column.Tp)
 
 	// Keep things compatible for old clients.
 	// Refer to mysql-server/sql/protocol.cc send_result_set_metadata()

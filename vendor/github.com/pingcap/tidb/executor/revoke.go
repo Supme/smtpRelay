@@ -19,6 +19,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
+	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/sessionctx"
@@ -36,8 +37,6 @@ var (
 
 // RevokeExec executes RevokeStmt.
 type RevokeExec struct {
-	baseExecutor
-
 	Privs      []*ast.PrivElem
 	ObjectType ast.ObjectTypeType
 	Level      *ast.GrantLevel
@@ -48,8 +47,13 @@ type RevokeExec struct {
 	done bool
 }
 
+// Schema implements the Executor Schema interface.
+func (e *RevokeExec) Schema() *expression.Schema {
+	return expression.NewSchema()
+}
+
 // Next implements Execution Next interface.
-func (e *RevokeExec) Next() (Row, error) {
+func (e *RevokeExec) Next() (*Row, error) {
 	if e.done {
 		return nil, nil
 	}
@@ -57,7 +61,8 @@ func (e *RevokeExec) Next() (Row, error) {
 	// Revoke for each user
 	for _, user := range e.Users {
 		// Check if user exists.
-		exists, err := userExists(e.ctx, user.User.Username, user.User.Hostname)
+		userName, host := parseUser(user.User)
+		exists, err := userExists(e.ctx, userName, host)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -65,14 +70,16 @@ func (e *RevokeExec) Next() (Row, error) {
 			return nil, errors.Errorf("Unknown user: %s", user.User)
 		}
 
-		err = e.revokeOneUser(user.User.Username, user.User.Hostname)
+		err = e.revokeOneUser(userName, host)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 	}
 	e.done = true
-	sessionctx.GetDomain(e.ctx).NotifyUpdatePrivilege(e.ctx)
-	return nil, nil
+	// Flush privileges.
+	dom := sessionctx.GetDomain(e.ctx)
+	err := dom.PrivilegeHandle().Update()
+	return nil, errors.Trace(err)
 }
 
 func (e *RevokeExec) revokeOneUser(user, host string) error {
@@ -186,5 +193,10 @@ func (e *RevokeExec) revokeColumnPriv(priv *ast.PrivElem, user, host string) err
 			return errors.Trace(err)
 		}
 	}
+	return nil
+}
+
+// Close implements the Executor Close interface.
+func (e *RevokeExec) Close() error {
 	return nil
 }

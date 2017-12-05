@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
-	goctx "golang.org/x/net/context"
 )
 
 var _ = Suite(&testTableSuite{})
@@ -39,7 +38,7 @@ type testTableSuite struct {
 	d *ddl
 }
 
-// testTableInfo creates a test table with num int columns and with no index.
+// create a test table with num int columns and with no index.
 func testTableInfo(c *C, d *ddl, name string, num int) *model.TableInfo {
 	var err error
 	tblInfo := &model.TableInfo{
@@ -187,7 +186,7 @@ func testGetTableWithError(d *ddl, schemaID, tableID int64) (table.Table, error)
 
 func (s *testTableSuite) SetUpSuite(c *C) {
 	s.store = testCreateStore(c, "test_table")
-	s.d = testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	s.d = newDDL(s.store, nil, nil, testLease)
 
 	s.dbInfo = testSchemaInfo(c, s.d, "test")
 	testCreateSchema(c, testNewContext(s.d), s.d, s.dbInfo)
@@ -222,12 +221,37 @@ func (s *testTableSuite) TestTable(c *C) {
 	// To drop a table with reorgTableDeleteLimit+10 records.
 	tbl := testGetTable(c, d, s.dbInfo.ID, tblInfo.ID)
 	for i := 1; i <= reorgTableDeleteLimit+10; i++ {
-		_, err := tbl.AddRecord(ctx, types.MakeDatums(i, i, i), false)
+		_, err := tbl.AddRecord(ctx, types.MakeDatums(i, i, i))
 		c.Assert(err, IsNil)
 	}
 
+	tc := &testDDLCallback{}
+	var checkErr error
+	var updatedCount int
+	tc.onBgJobUpdated = func(job *model.Job) {
+		if job == nil || checkErr != nil {
+			return
+		}
+		job.Mu.Lock()
+		count := job.RowCount
+		job.Mu.Unlock()
+		if updatedCount == 0 && count != int64(reorgTableDeleteLimit) {
+			checkErr = errors.Errorf("row count %v isn't equal to %v", count, reorgTableDeleteLimit)
+			return
+		}
+		if updatedCount == 1 && count != int64(reorgTableDeleteLimit+10) {
+			checkErr = errors.Errorf("row count %v isn't equal to %v", count, reorgTableDeleteLimit+10)
+		}
+		updatedCount++
+	}
+	d.setHook(tc)
 	job = testDropTable(c, ctx, d, s.dbInfo, tblInfo)
 	testCheckJobDone(c, d, job, false)
+
+	// Check background ddl info.
+	verifyBgJobState(c, d, job, model.JobDone, testLease*350)
+	c.Assert(errors.ErrorStack(checkErr), Equals, "")
+	c.Assert(updatedCount, Equals, 2)
 
 	// for truncate table
 	tblInfo = testTableInfo(c, d, "tt", 3)
@@ -250,7 +274,7 @@ func (s *testTableSuite) TestTableResume(c *C) {
 	defer testleak.AfterTest(c)()
 	d := s.d
 
-	testCheckOwner(c, d, true)
+	testCheckOwner(c, d, true, ddlJobFlag)
 
 	tblInfo := testTableInfo(c, d, "t1", 3)
 	job := &model.Job{

@@ -14,6 +14,7 @@
 package expression
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -45,69 +46,6 @@ func (s *testEvaluatorSuite) SetUpSuite(c *C) {
 	s.ctx = mock.NewContext()
 }
 
-func (s *testEvaluatorSuite) TearDownSuite(c *C) {
-}
-
-func (s *testEvaluatorSuite) kindToFieldType(kind byte) types.FieldType {
-	ft := types.FieldType{}
-	switch kind {
-	case types.KindNull:
-		ft.Tp = mysql.TypeNull
-	case types.KindInt64:
-		ft.Tp = mysql.TypeLonglong
-	case types.KindUint64:
-		ft.Tp = mysql.TypeLonglong
-		ft.Flag |= mysql.UnsignedFlag
-	case types.KindMinNotNull:
-		ft.Tp = mysql.TypeLonglong
-	case types.KindMaxValue:
-		ft.Tp = mysql.TypeLonglong
-	case types.KindFloat32:
-		ft.Tp = mysql.TypeDouble
-	case types.KindFloat64:
-		ft.Tp = mysql.TypeDouble
-	case types.KindString:
-		ft.Tp = mysql.TypeVarString
-	case types.KindBytes:
-		ft.Tp = mysql.TypeVarString
-	case types.KindMysqlEnum:
-		ft.Tp = mysql.TypeEnum
-	case types.KindMysqlSet:
-		ft.Tp = mysql.TypeSet
-	case types.KindInterface:
-		ft.Tp = mysql.TypeVarString
-	case types.KindMysqlDecimal:
-		ft.Tp = mysql.TypeNewDecimal
-	case types.KindMysqlDuration:
-		ft.Tp = mysql.TypeDuration
-	case types.KindMysqlTime:
-		ft.Tp = mysql.TypeDatetime
-	case types.KindBinaryLiteral:
-		ft.Tp = mysql.TypeVarString
-	case types.KindMysqlBit:
-		ft.Tp = mysql.TypeBit
-	}
-	return ft
-}
-
-func (s *testEvaluatorSuite) datumsToConstants(datums []types.Datum) []Expression {
-	constants := make([]Expression, 0, len(datums))
-	for _, d := range datums {
-		ft := s.kindToFieldType(d.Kind())
-		ft.Flen, ft.Decimal = types.UnspecifiedLength, types.UnspecifiedLength
-		constants = append(constants, &Constant{Value: d, RetType: &ft})
-	}
-	return constants
-}
-
-func (s *testEvaluatorSuite) primitiveValsToConstants(args []interface{}) []Expression {
-	cons := s.datumsToConstants(types.MakeDatums(args...))
-	for i, arg := range args {
-		types.DefaultTypeForValue(arg, cons[i].GetType())
-	}
-	return cons
-}
-
 func (s *testEvaluatorSuite) TestSleep(c *C) {
 	defer testleak.AfterTest(c)()
 	ctx := mock.NewContext()
@@ -117,63 +55,41 @@ func (s *testEvaluatorSuite) TestSleep(c *C) {
 	// non-strict model
 	sessVars.StrictSQLMode = false
 	d := make([]types.Datum, 1)
-	f, err := fc.getFunction(ctx, s.datumsToConstants(d))
+	f, err := fc.getFunction(datumsToConstants(d), ctx)
 	c.Assert(err, IsNil)
-	ret, isNull, err := f.evalInt(nil)
+	ret, err := f.eval(nil)
 	c.Assert(err, IsNil)
-	c.Assert(isNull, IsTrue)
-	c.Assert(ret, Equals, int64(0))
+	c.Assert(ret, DeepEquals, types.NewIntDatum(0))
 	d[0].SetInt64(-1)
-	f, err = fc.getFunction(ctx, s.datumsToConstants(d))
+	f, err = fc.getFunction(datumsToConstants(d), ctx)
 	c.Assert(err, IsNil)
-	ret, isNull, err = f.evalInt(nil)
+	ret, err = f.eval(nil)
 	c.Assert(err, IsNil)
-	c.Assert(isNull, IsFalse)
-	c.Assert(ret, Equals, int64(0))
+	c.Assert(ret, DeepEquals, types.NewIntDatum(0))
 
 	// for error case under the strict model
 	sessVars.StrictSQLMode = true
 	d[0].SetNull()
-	_, err = fc.getFunction(ctx, s.datumsToConstants(d))
+	_, err = fc.getFunction(datumsToConstants(d), ctx)
 	c.Assert(err, IsNil)
-	ret, isNull, err = f.evalInt(nil)
+	ret, err = f.eval(nil)
 	c.Assert(err, NotNil)
-	c.Assert(isNull, IsFalse)
 	d[0].SetFloat64(-2.5)
-	_, err = fc.getFunction(ctx, s.datumsToConstants(d))
+	_, err = fc.getFunction(datumsToConstants(d), ctx)
 	c.Assert(err, IsNil)
-	ret, isNull, err = f.evalInt(nil)
+	ret, err = f.eval(nil)
 	c.Assert(err, NotNil)
-	c.Assert(isNull, IsFalse)
 
 	// strict model
 	d[0].SetFloat64(0.5)
 	start := time.Now()
-	f, err = fc.getFunction(ctx, s.datumsToConstants(d))
+	f, err = fc.getFunction(datumsToConstants(d), ctx)
 	c.Assert(err, IsNil)
-	ret, isNull, err = f.evalInt(nil)
+	ret, err = f.eval(nil)
 	c.Assert(err, IsNil)
-	c.Assert(isNull, IsFalse)
-	c.Assert(ret, Equals, int64(0))
+	c.Assert(ret, DeepEquals, types.NewIntDatum(0))
 	sub := time.Since(start)
 	c.Assert(sub.Nanoseconds(), GreaterEqual, int64(0.5*1e9))
-
-	// quit when context canceled.
-	d[0].SetFloat64(2)
-	f, err = fc.getFunction(ctx, s.datumsToConstants(d))
-	c.Assert(err, IsNil)
-	start = time.Now()
-	go func() {
-		time.Sleep(1 * time.Second)
-		ctx.Cancel()
-	}()
-	ret, isNull, err = f.evalInt(nil)
-	sub = time.Since(start)
-	c.Assert(err, IsNil)
-	c.Assert(isNull, IsFalse)
-	c.Assert(ret, Equals, int64(1))
-	c.Assert(sub.Nanoseconds(), LessEqual, int64(2*1e9))
-	c.Assert(sub.Nanoseconds(), GreaterEqual, int64(1*1e9))
 }
 
 func (s *testEvaluatorSuite) TestBinopComparison(c *C) {
@@ -215,9 +131,9 @@ func (s *testEvaluatorSuite) TestBinopComparison(c *C) {
 	}
 	for _, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.lhs, t.rhs)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		val, err := v.ToBool(s.ctx.GetSessionVars().StmtCtx)
 		c.Assert(err, IsNil)
@@ -246,9 +162,9 @@ func (s *testEvaluatorSuite) TestBinopComparison(c *C) {
 
 	for _, t := range nilTbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.lhs, t.rhs)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		c.Assert(v.Kind(), Equals, types.KindNull)
 	}
@@ -262,17 +178,17 @@ func (s *testEvaluatorSuite) TestBinopLogic(c *C) {
 		rhs interface{}
 		ret interface{}
 	}{
-		{nil, ast.LogicAnd, 1, nil},
-		{nil, ast.LogicAnd, 0, 0},
-		{nil, ast.LogicOr, 1, 1},
-		{nil, ast.LogicOr, 0, nil},
+		{nil, ast.AndAnd, 1, nil},
+		{nil, ast.AndAnd, 0, 0},
+		{nil, ast.OrOr, 1, 1},
+		{nil, ast.OrOr, 0, nil},
 		{nil, ast.LogicXor, 1, nil},
 		{nil, ast.LogicXor, 0, nil},
-		{1, ast.LogicAnd, 0, 0},
-		{1, ast.LogicAnd, 1, 1},
-		{1, ast.LogicOr, 0, 1},
-		{1, ast.LogicOr, 1, 1},
-		{0, ast.LogicOr, 0, 0},
+		{1, ast.AndAnd, 0, 0},
+		{1, ast.AndAnd, 1, 1},
+		{1, ast.OrOr, 0, 1},
+		{1, ast.OrOr, 1, 1},
+		{0, ast.OrOr, 0, 0},
 		{1, ast.LogicXor, 0, 1},
 		{1, ast.LogicXor, 1, 0},
 		{0, ast.LogicXor, 0, 0},
@@ -280,9 +196,9 @@ func (s *testEvaluatorSuite) TestBinopLogic(c *C) {
 	}
 	for _, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.lhs, t.rhs)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		switch x := t.ret.(type) {
 		case nil:
@@ -316,9 +232,9 @@ func (s *testEvaluatorSuite) TestBinopBitop(c *C) {
 
 	for _, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.lhs, t.rhs)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 
 		switch x := t.ret.(type) {
@@ -347,7 +263,8 @@ func (s *testEvaluatorSuite) TestBinopNumeric(c *C) {
 		{uint64(1), ast.Plus, uint64(1), 2},
 		{uint64(1), ast.Plus, -1, 0},
 		{1, ast.Plus, []byte("1"), 2},
-		{1, ast.Plus, types.NewBinaryLiteralFromUint(1, -1), 2},
+		{1, ast.Plus, types.Hex{Value: 1}, 2},
+		{1, ast.Plus, types.Bit{Value: 1, Width: 1}, 2},
 		{1, ast.Plus, types.Enum{Name: "a", Value: 1}, 2},
 		{1, ast.Plus, types.Set{Name: "a", Value: 1}, 2},
 
@@ -390,6 +307,7 @@ func (s *testEvaluatorSuite) TestBinopNumeric(c *C) {
 		{uint64(1), ast.IntDiv, 0, nil},
 		{uint64(1), ast.IntDiv, uint64(0), nil},
 		{1.0, ast.IntDiv, 2.0, 0},
+		{1.0, ast.IntDiv, 0, nil},
 
 		// mod
 		{10, ast.Mod, 2, 0},
@@ -410,9 +328,9 @@ func (s *testEvaluatorSuite) TestBinopNumeric(c *C) {
 
 	for _, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.lhs, t.rhs)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		switch v.Kind() {
 		case types.KindNull:
@@ -428,58 +346,6 @@ func (s *testEvaluatorSuite) TestBinopNumeric(c *C) {
 			c.Assert(r, Equals, f)
 		}
 	}
-
-	testcases := []struct {
-		lhs interface{}
-		op  string
-		rhs interface{}
-	}{
-		// div
-		{1, ast.Div, float64(0)},
-		{1, ast.Div, 0},
-		// int div
-		{1, ast.IntDiv, 0},
-		{1, ast.IntDiv, uint64(0)},
-		{uint64(1), ast.IntDiv, 0},
-		{uint64(1), ast.IntDiv, uint64(0)},
-		// mod
-		{10, ast.Mod, 0},
-		{10, ast.Mod, uint64(0)},
-		{uint64(10), ast.Mod, 0},
-		{uint64(10), ast.Mod, uint64(0)},
-		{float64(10), ast.Mod, 0},
-		{types.NewDecFromInt(10), ast.Mod, 0},
-	}
-
-	oldInSelectStmt := s.ctx.GetSessionVars().StmtCtx.InSelectStmt
-	s.ctx.GetSessionVars().StmtCtx.InSelectStmt = false
-	oldSQLMode := s.ctx.GetSessionVars().SQLMode
-	s.ctx.GetSessionVars().SQLMode |= mysql.ModeErrorForDivisionByZero
-	oldInInsertStmt := s.ctx.GetSessionVars().StmtCtx.InInsertStmt
-	s.ctx.GetSessionVars().StmtCtx.InInsertStmt = true
-	for _, t := range testcases {
-		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
-		c.Assert(err, IsNil)
-		_, err = evalBuiltinFunc(f, nil)
-		c.Assert(err, NotNil)
-	}
-
-	oldDividedByZeroAsWarning := s.ctx.GetSessionVars().StmtCtx.DividedByZeroAsWarning
-	s.ctx.GetSessionVars().StmtCtx.DividedByZeroAsWarning = true
-	for _, t := range testcases {
-		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.lhs, t.rhs)))
-		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
-		c.Assert(err, IsNil)
-		c.Assert(v.Kind(), Equals, types.KindNull)
-	}
-
-	s.ctx.GetSessionVars().StmtCtx.InSelectStmt = oldInSelectStmt
-	s.ctx.GetSessionVars().SQLMode = oldSQLMode
-	s.ctx.GetSessionVars().StmtCtx.InInsertStmt = oldInInsertStmt
-	s.ctx.GetSessionVars().StmtCtx.DividedByZeroAsWarning = oldDividedByZeroAsWarning
 }
 
 func (s *testEvaluatorSuite) TestExtract(c *C) {
@@ -512,25 +378,47 @@ func (s *testEvaluatorSuite) TestExtract(c *C) {
 	}
 	for _, t := range tbl {
 		fc := funcs[ast.Extract]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.Unit, str)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.Unit, str)), s.ctx)
 		c.Assert(err, IsNil)
-		v, err := evalBuiltinFunc(f, nil)
+		v, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		c.Assert(v, testutil.DatumEquals, types.NewDatum(t.Expect))
 	}
 
 	// Test nil
 	fc := funcs[ast.Extract]
-	f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums("SECOND", nil)))
+	f, err := fc.getFunction(datumsToConstants(types.MakeDatums("SECOND", nil)), s.ctx)
 	c.Assert(err, IsNil)
-	v, err := evalBuiltinFunc(f, nil)
+	v, err := f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(v.Kind(), Equals, types.KindNull)
 }
 
+func (s *testEvaluatorSuite) TestLastInsertID(c *C) {
+	defer testleak.AfterTest(c)()
+	cases := []struct {
+		args      []interface{}
+		resultStr string
+	}{
+		{nil, "0"},
+		{[]interface{}{1}, "1"},
+	}
+
+	c.Log(s.ctx)
+	for _, ca := range cases {
+		fc := funcs[ast.LastInsertId]
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(ca.args...)), s.ctx)
+		c.Assert(err, IsNil)
+		val, err := f.eval(nil)
+		c.Assert(err, IsNil)
+		valStr := fmt.Sprintf("%v", val.GetValue())
+		c.Assert(valStr, Equals, ca.resultStr, Commentf("for %v", ca.args))
+	}
+}
+
 func (s *testEvaluatorSuite) TestLike(c *C) {
 	defer testleak.AfterTest(c)()
-	tests := []struct {
+	testCases := []struct {
 		input   string
 		pattern string
 		match   int
@@ -538,23 +426,23 @@ func (s *testEvaluatorSuite) TestLike(c *C) {
 		{"a", "", 0},
 		{"a", "a", 1},
 		{"a", "b", 0},
-		{"aA", "Aa", 0},
-		{"aAb", "Aa%", 0},
-		{"aAb", "aA_", 1},
+		{"aA", "Aa", 1},
+		{"aAb", "Aa%", 1},
+		{"aAb", "Aa_", 1},
 	}
-	for _, tt := range tests {
+	for _, tc := range testCases {
 		fc := funcs[ast.Like]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(tt.input, tt.pattern, 0)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(tc.input, tc.pattern, 0)), s.ctx)
 		c.Assert(err, IsNil)
-		r, err := evalBuiltinFunc(f, nil)
+		r, err := f.eval(nil)
 		c.Assert(err, IsNil)
-		c.Assert(r, testutil.DatumEquals, types.NewDatum(tt.match))
+		c.Assert(r, testutil.DatumEquals, types.NewDatum(tc.match))
 	}
 }
 
 func (s *testEvaluatorSuite) TestRegexp(c *C) {
 	defer testleak.AfterTest(c)()
-	tests := []struct {
+	tbl := []struct {
 		pattern string
 		input   string
 		match   int64
@@ -569,13 +457,13 @@ func (s *testEvaluatorSuite) TestRegexp(c *C) {
 		{".ab", "aab", 1},
 		{".*", "abcd", 1},
 	}
-	for _, tt := range tests {
+	for _, v := range tbl {
 		fc := funcs[ast.Regexp]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(tt.input, tt.pattern)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(v.input, v.pattern)), s.ctx)
 		c.Assert(err, IsNil)
-		match, err := evalBuiltinFunc(f, nil)
+		match, err := f.eval(nil)
 		c.Assert(err, IsNil)
-		c.Assert(match, testutil.DatumEquals, types.NewDatum(tt.match), Commentf("%v", tt))
+		c.Assert(match, testutil.DatumEquals, types.NewDatum(v.match), Commentf("%v", v))
 	}
 }
 
@@ -590,14 +478,29 @@ func (s *testEvaluatorSuite) TestUnaryOp(c *C) {
 		{1, ast.UnaryNot, int64(0)},
 		{0, ast.UnaryNot, int64(1)},
 		{nil, ast.UnaryNot, nil},
-		{types.NewBinaryLiteralFromUint(0, -1), ast.UnaryNot, int64(1)},
-		{types.NewBinaryLiteralFromUint(1, -1), ast.UnaryNot, int64(0)},
+		{types.Hex{Value: 0}, ast.UnaryNot, int64(1)},
+		{types.Bit{Value: 0, Width: 1}, ast.UnaryNot, int64(1)},
 		{types.Enum{Name: "a", Value: 1}, ast.UnaryNot, int64(0)},
 		{types.Set{Name: "a", Value: 1}, ast.UnaryNot, int64(0)},
 
 		// test BitNeg.
 		{nil, ast.BitNeg, nil},
 		{-1, ast.BitNeg, uint64(0)},
+
+		// test Plus.
+		{nil, ast.UnaryPlus, nil},
+		{float64(1.0), ast.UnaryPlus, float64(1.0)},
+		{int64(1), ast.UnaryPlus, int64(1)},
+		{int64(1), ast.UnaryPlus, int64(1)},
+		{uint64(1), ast.UnaryPlus, uint64(1)},
+		{"1.0", ast.UnaryPlus, "1.0"},
+		{[]byte("1.0"), ast.UnaryPlus, []byte("1.0")},
+		{types.Hex{Value: 1}, ast.UnaryPlus, types.Hex{Value: 1}},
+		{types.Bit{Value: 1, Width: 1}, ast.UnaryPlus, types.Bit{Value: 1, Width: 1}},
+		{true, ast.UnaryPlus, int64(1)},
+		{false, ast.UnaryPlus, int64(0)},
+		{types.Enum{Name: "a", Value: 1}, ast.UnaryPlus, types.Enum{Name: "a", Value: 1}},
+		{types.Set{Name: "a", Value: 1}, ast.UnaryPlus, types.Set{Name: "a", Value: 1}},
 
 		// test Minus.
 		{nil, ast.UnaryMinus, nil},
@@ -607,7 +510,8 @@ func (s *testEvaluatorSuite) TestUnaryOp(c *C) {
 		{uint64(1), ast.UnaryMinus, -int64(1)},
 		{"1.0", ast.UnaryMinus, -1.0},
 		{[]byte("1.0"), ast.UnaryMinus, -1.0},
-		{types.NewBinaryLiteralFromUint(1, -1), ast.UnaryMinus, -1.0},
+		{types.Hex{Value: 1}, ast.UnaryMinus, -1.0},
+		{types.Bit{Value: 1, Width: 1}, ast.UnaryMinus, -1.0},
 		{true, ast.UnaryMinus, int64(-1)},
 		{false, ast.UnaryMinus, int64(0)},
 		{types.Enum{Name: "a", Value: 1}, ast.UnaryMinus, -1.0},
@@ -615,9 +519,9 @@ func (s *testEvaluatorSuite) TestUnaryOp(c *C) {
 	}
 	for i, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.arg)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.arg)), s.ctx)
 		c.Assert(err, IsNil)
-		result, err := evalBuiltinFunc(f, nil)
+		result, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		c.Assert(result, testutil.DatumEquals, types.NewDatum(t.result), Commentf("%d", i))
 	}
@@ -627,6 +531,17 @@ func (s *testEvaluatorSuite) TestUnaryOp(c *C) {
 		op     string
 		result interface{}
 	}{
+		{types.NewDecFromInt(1), ast.UnaryPlus, types.NewDecFromInt(1)},
+		{types.Duration{Duration: time.Duration(838*3600 + 59*60 + 59), Fsp: types.DefaultFsp}, ast.UnaryPlus,
+			types.Duration{Duration: time.Duration(838*3600 + 59*60 + 59), Fsp: types.DefaultFsp}},
+		{types.Time{
+			Time: types.FromGoTime(time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)),
+			Type: mysql.TypeDatetime,
+			Fsp:  0},
+			ast.UnaryPlus,
+			types.Time{
+				Time: types.FromGoTime(time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)),
+				Type: mysql.TypeDatetime, Fsp: 0}},
 		{types.NewDecFromInt(1), ast.UnaryMinus, types.NewDecFromInt(-1)},
 		{types.ZeroDuration, ast.UnaryMinus, new(types.MyDecimal)},
 		{types.Time{Time: types.FromGoTime(time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)), Type: mysql.TypeDatetime, Fsp: 0}, ast.UnaryMinus, types.NewDecFromInt(-20091110230000)},
@@ -634,34 +549,63 @@ func (s *testEvaluatorSuite) TestUnaryOp(c *C) {
 
 	for _, t := range tbl {
 		fc := funcs[t.op]
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(t.arg)))
+		f, err := fc.getFunction(datumsToConstants(types.MakeDatums(t.arg)), s.ctx)
 		c.Assert(err, IsNil)
-		c.Assert(f, NotNil)
-		result, err := evalBuiltinFunc(f, nil)
+		result, err := f.eval(nil)
 		c.Assert(err, IsNil)
 
-		expect := types.NewDatum(t.result)
-		ret, err := result.CompareDatum(s.ctx.GetSessionVars().StmtCtx, &expect)
+		ret, err := result.CompareDatum(s.ctx.GetSessionVars().StmtCtx, types.NewDatum(t.result))
 		c.Assert(err, IsNil)
-		c.Assert(ret, Equals, 0, Commentf("%v %s", t.arg, t.op))
+		c.Assert(ret, Equals, 0)
 	}
 }
 
 func (s *testEvaluatorSuite) TestMod(c *C) {
 	fc := funcs[ast.Mod]
-	f, err := fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(234, 10)))
+	f, err := fc.getFunction(datumsToConstants(types.MakeDatums(234, 10)), s.ctx)
 	c.Assert(err, IsNil)
-	r, err := evalBuiltinFunc(f, nil)
+	r, err := f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(r, testutil.DatumEquals, types.NewIntDatum(4))
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(29, 9)))
+	f, err = fc.getFunction(datumsToConstants(types.MakeDatums(29, 9)), s.ctx)
 	c.Assert(err, IsNil)
-	r, err = evalBuiltinFunc(f, nil)
+	r, err = f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(r, testutil.DatumEquals, types.NewIntDatum(2))
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants(types.MakeDatums(34.5, 3)))
+	f, err = fc.getFunction(datumsToConstants(types.MakeDatums(34.5, 3)), s.ctx)
 	c.Assert(err, IsNil)
-	r, err = evalBuiltinFunc(f, nil)
+	r, err = f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(r, testutil.DatumEquals, types.NewDatum(1.5))
+}
+
+func (s *testEvaluatorSuite) TestDynamic(c *C) {
+	var dynamicFuncs = map[string]int{
+		ast.Rand:         0,
+		ast.ConnectionID: 0,
+		ast.CurrentUser:  0,
+		ast.User:         0,
+		ast.Database:     0,
+		ast.Schema:       0,
+		ast.FoundRows:    0,
+		ast.LastInsertId: 0,
+		ast.Version:      0,
+		ast.Sleep:        0,
+		ast.GetVar:       0,
+		ast.SetVar:       0,
+		ast.Values:       0,
+		ast.SessionUser:  0,
+		ast.SystemUser:   0,
+		ast.RowCount:     0,
+	}
+	for name, fc := range funcs {
+		f, _ := fc.getFunction(nil, s.ctx)
+		if _, ok := dynamicFuncs[name]; ok {
+			c.Assert(f.isDeterministic(), IsFalse)
+		} else {
+			c.Assert(f.isDeterministic(), IsTrue)
+		}
+	}
+	values := NewValuesFunc(0, nil, nil)
+	c.Assert(values.Function.isDeterministic(), IsFalse)
 }

@@ -20,8 +20,9 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/util/goroutine_pool"
+	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tipb/go-tipb"
 	goctx "golang.org/x/net/context"
@@ -29,6 +30,7 @@ import (
 
 var (
 	errInvalidResp = terror.ClassXEval.New(codeInvalidResp, "invalid response")
+	errNilResp     = terror.ClassXEval.New(codeNilResp, "client returns nil response")
 )
 
 var (
@@ -36,49 +38,50 @@ var (
 	_ PartialResult = &partialResult{}
 )
 
-var selectResultGP = gp.New(2 * time.Minute)
-
 // SelectResult is an iterator of coprocessor partial results.
 type SelectResult interface {
 	// Next gets the next partial result.
 	Next() (PartialResult, error)
-	// NextRaw gets the next raw result.
-	NextRaw() ([]byte, error)
+	// SetFields sets the expected result type.
+	SetFields(fields []*types.FieldType)
 	// Close closes the iterator.
 	Close() error
 	// Fetch fetches partial results from client.
 	// The caller should call SetFields() before call Fetch().
 	Fetch(ctx goctx.Context)
+	// IgnoreData sets ignore data attr to true.
+	// For index double scan, we do not need row data when scanning index.
+	IgnoreData()
 }
 
 // PartialResult is the result from a single region server.
 type PartialResult interface {
-	// Next returns the next rowData of the sub result.
-	// If no more row to return, rowData would be nil.
-	Next() (handle int64, rowData []byte, err error)
+	// Next returns the next row of the sub result.
+	// If no more row to return, data would be nil.
+	Next() (handle int64, data []types.Datum, err error)
 	// Close closes the partial result.
 	Close() error
 }
 
 // SelectResult is used to get response rows from SelectRequest.
 type selectResult struct {
-	label     string
-	aggregate bool
-	resp      kv.Response
+	index      bool
+	aggregate  bool
+	fields     []*types.FieldType
+	resp       kv.Response
+	ignoreData bool
 
 	results chan resultWithErr
 	closed  chan struct{}
 }
 
 type resultWithErr struct {
-	result []byte
+	result PartialResult
 	err    error
 }
 
 func (r *selectResult) Fetch(ctx goctx.Context) {
-	selectResultGP.Go(func() {
-		r.fetch(ctx)
-	})
+	go r.fetch(ctx)
 }
 
 func (r *selectResult) fetch(ctx goctx.Context) {
@@ -86,7 +89,13 @@ func (r *selectResult) fetch(ctx goctx.Context) {
 	defer func() {
 		close(r.results)
 		duration := time.Since(startTime)
-		queryHistgram.WithLabelValues(r.label).Observe(duration.Seconds())
+		var label string
+		if r.index {
+			label = "index"
+		} else {
+			label = "table"
+		}
+		queryHistgram.WithLabelValues(label).Observe(duration.Seconds())
 	}()
 	for {
 		resultSubset, err := r.resp.Next()
@@ -97,9 +106,16 @@ func (r *selectResult) fetch(ctx goctx.Context) {
 		if resultSubset == nil {
 			return
 		}
+		pr := &partialResult{
+			index:      r.index,
+			fields:     r.fields,
+			aggregate:  r.aggregate,
+			ignoreData: r.ignoreData,
+		}
+		pr.unmarshal(resultSubset)
 
 		select {
-		case r.results <- resultWithErr{result: resultSubset}:
+		case r.results <- resultWithErr{result: pr}:
 		case <-r.closed:
 			// if selectResult called Close() already, make fetch goroutine exit
 			return
@@ -112,21 +128,16 @@ func (r *selectResult) fetch(ctx goctx.Context) {
 // Next returns the next row.
 func (r *selectResult) Next() (PartialResult, error) {
 	re := <-r.results
-	if re.err != nil {
-		return nil, errors.Trace(re.err)
-	}
-	if re.result == nil {
-		return nil, nil
-	}
-	pr := &partialResult{}
-	err := pr.unmarshal(re.result)
-	return pr, errors.Trace(err)
+	return re.result, errors.Trace(re.err)
 }
 
-// NextRaw returns the next raw partial result.
-func (r *selectResult) NextRaw() ([]byte, error) {
-	re := <-r.results
-	return re.result, errors.Trace(re.err)
+// SetFields sets select result field types.
+func (r *selectResult) SetFields(fields []*types.FieldType) {
+	r.fields = fields
+}
+
+func (r *selectResult) IgnoreData() {
+	r.ignoreData = true
 }
 
 // Close closes SelectResult.
@@ -138,10 +149,14 @@ func (r *selectResult) Close() error {
 
 // partialResult represents a subset of select result.
 type partialResult struct {
+	index      bool
+	aggregate  bool
+	fields     []*types.FieldType
 	resp       *tipb.SelectResponse
 	chunkIdx   int
 	cursor     int
 	dataOffset int64
+	ignoreData bool
 }
 
 func (pr *partialResult) unmarshal(resultSubset []byte) error {
@@ -158,23 +173,60 @@ func (pr *partialResult) unmarshal(resultSubset []byte) error {
 	return nil
 }
 
-var zeroLenData = make([]byte, 0)
+var dummyData = make([]types.Datum, 0)
 
 // Next returns the next row of the sub result.
 // If no more row to return, data would be nil.
-func (pr *partialResult) Next() (handle int64, data []byte, err error) {
-	chunk := pr.getChunk()
-	if chunk == nil {
+func (pr *partialResult) Next() (handle int64, data []types.Datum, err error) {
+	if len(pr.resp.Chunks) > 0 {
+		// For new resp rows structure.
+		chunk := pr.getChunk()
+		if chunk == nil {
+			return 0, nil, nil
+		}
+		rowMeta := chunk.RowsMeta[pr.cursor]
+		if !pr.ignoreData {
+			rowData := chunk.RowsData[pr.dataOffset : pr.dataOffset+rowMeta.Length]
+			data, err = tablecodec.DecodeValues(rowData, pr.fields, pr.index)
+			if err != nil {
+				return 0, nil, errors.Trace(err)
+			}
+			pr.dataOffset += rowMeta.Length
+		}
+		if data == nil {
+			data = dummyData
+		}
+		if !pr.aggregate {
+			handle = rowMeta.Handle
+		}
+		pr.cursor++
+		return
+	}
+	if pr.cursor >= len(pr.resp.Rows) {
 		return 0, nil, nil
 	}
-	rowMeta := chunk.RowsMeta[pr.cursor]
-	data = chunk.RowsData[pr.dataOffset : pr.dataOffset+rowMeta.Length]
-	if data == nil {
-		// The caller checks if data is nil to determine finished.
-		data = zeroLenData
+	row := pr.resp.Rows[pr.cursor]
+	if !pr.ignoreData {
+		data, err = tablecodec.DecodeValues(row.Data, pr.fields, pr.index)
+		if err != nil {
+			return 0, nil, errors.Trace(err)
+		}
 	}
-	pr.dataOffset += rowMeta.Length
-	handle = rowMeta.Handle
+	if data == nil {
+		// When no column is referenced, the data may be nil, like 'select count(*) from t'.
+		// In this case, we need to create a zero length datum slice,
+		// as caller will check if data is nil to finish iteration.
+		// data = make([]types.Datum, 0)
+		data = dummyData
+	}
+	if !pr.aggregate {
+		handleBytes := row.GetHandle()
+		_, datum, err := codec.DecodeOne(handleBytes)
+		if err != nil {
+			return 0, nil, errors.Trace(err)
+		}
+		handle = datum.GetInt64()
+	}
 	pr.cursor++
 	return
 }
@@ -203,7 +255,7 @@ func (pr *partialResult) Close() error {
 // concurrency: The max concurrency for underlying coprocessor request.
 // keepOrder: If the result should returned in key order. For example if we need keep data in order by
 //            scan index, we should set keepOrder to true.
-func Select(client kv.Client, ctx goctx.Context, req *tipb.SelectRequest, keyRanges []kv.KeyRange, concurrency int, keepOrder bool, isolationLevel kv.IsoLevel, priority int) (SelectResult, error) {
+func Select(client kv.Client, ctx goctx.Context, req *tipb.SelectRequest, keyRanges []kv.KeyRange, concurrency int, keepOrder bool) (SelectResult, error) {
 	var err error
 	defer func() {
 		// Add metrics
@@ -215,7 +267,7 @@ func Select(client kv.Client, ctx goctx.Context, req *tipb.SelectRequest, keyRan
 	}()
 
 	// Convert tipb.*Request to kv.Request.
-	kvReq, err1 := composeRequest(req, keyRanges, concurrency, keepOrder, isolationLevel, priority)
+	kvReq, err1 := composeRequest(req, keyRanges, concurrency, keepOrder)
 	if err1 != nil {
 		err = errors.Trace(err1)
 		return nil, err
@@ -223,7 +275,8 @@ func Select(client kv.Client, ctx goctx.Context, req *tipb.SelectRequest, keyRan
 
 	resp := client.Send(ctx, kvReq)
 	if resp == nil {
-		return nil, errors.New("client returns nil response")
+		err = errors.New("client returns nil response")
+		return nil, err
 	}
 	result := &selectResult{
 		resp:    resp,
@@ -233,25 +286,28 @@ func Select(client kv.Client, ctx goctx.Context, req *tipb.SelectRequest, keyRan
 	// If Aggregates is not nil, we should set result fields latter.
 	if len(req.Aggregates) == 0 && len(req.GroupBy) == 0 {
 		if req.TableInfo != nil {
-			result.label = "table"
+			result.fields = ProtoColumnsToFieldTypes(req.TableInfo.Columns)
 		} else {
-			result.label = "index"
+			result.fields = ProtoColumnsToFieldTypes(req.IndexInfo.Columns)
+			length := len(req.IndexInfo.Columns)
+			if req.IndexInfo.Columns[length-1].GetPkHandle() {
+				// Returned index row do not contains extra PKHandle column.
+				result.fields = result.fields[:length-1]
+			}
+			result.index = true
 		}
 	} else {
-		result.label = "aggregate"
+		result.aggregate = true
 	}
 	return result, nil
 }
 
 // Convert tipb.Request to kv.Request.
-func composeRequest(req *tipb.SelectRequest, keyRanges []kv.KeyRange, concurrency int, keepOrder bool, isolationLevel kv.IsoLevel, priority int) (*kv.Request, error) {
+func composeRequest(req *tipb.SelectRequest, keyRanges []kv.KeyRange, concurrency int, keepOrder bool) (*kv.Request, error) {
 	kvReq := &kv.Request{
-		StartTs:        req.StartTs,
-		Concurrency:    concurrency,
-		KeepOrder:      keepOrder,
-		KeyRanges:      keyRanges,
-		IsolationLevel: isolationLevel,
-		Priority:       priority,
+		Concurrency: concurrency,
+		KeepOrder:   keepOrder,
+		KeyRanges:   keyRanges,
 	}
 	if req.IndexInfo != nil {
 		kvReq.Tp = kv.ReqTypeIndex
@@ -279,7 +335,6 @@ const (
 func FieldTypeFromPBColumn(col *tipb.ColumnInfo) *types.FieldType {
 	return &types.FieldType{
 		Tp:      byte(col.GetTp()),
-		Flag:    uint(col.Flag),
 		Flen:    int(col.GetColumnLen()),
 		Decimal: int(col.GetDecimal()),
 		Elems:   col.Elems,
@@ -300,15 +355,11 @@ func columnToProto(c *model.ColumnInfo) *tipb.ColumnInfo {
 	return pc
 }
 
-// TODO: update it when more collate is supported.
 func collationToProto(c string) int32 {
-	v := mysql.CollationNames[c]
-	if v == mysql.BinaryCollationID {
-		return int32(mysql.BinaryCollationID)
+	v, ok := mysql.CollationNames[c]
+	if ok {
+		return int32(v)
 	}
-	// We only support binary and utf8_bin collation.
-	// Setting other collations to utf8_bin for old data compatibility.
-	// For the data created when we didn't enforce utf8_bin collation in create table.
 	return int32(mysql.DefaultCollationID)
 }
 
@@ -317,9 +368,7 @@ func ColumnsToProto(columns []*model.ColumnInfo, pkIsHandle bool) []*tipb.Column
 	cols := make([]*tipb.ColumnInfo, 0, len(columns))
 	for _, c := range columns {
 		col := columnToProto(c)
-		// TODO: Here `PkHandle`'s meaning is changed, we will change it to `IsHandle` when tikv's old select logic
-		// is abandoned.
-		if (pkIsHandle && mysql.HasPriKeyFlag(c.Flag)) || c.ID == model.ExtraHandleID {
+		if pkIsHandle && mysql.HasPriKeyFlag(c.Flag) {
 			col.PkHandle = true
 		} else {
 			col.PkHandle = false
@@ -327,6 +376,22 @@ func ColumnsToProto(columns []*model.ColumnInfo, pkIsHandle bool) []*tipb.Column
 		cols = append(cols, col)
 	}
 	return cols
+}
+
+// ProtoColumnsToFieldTypes converts tipb column info slice to FieldTyps slice.
+func ProtoColumnsToFieldTypes(pColumns []*tipb.ColumnInfo) []*types.FieldType {
+	fields := make([]*types.FieldType, len(pColumns))
+	for i, v := range pColumns {
+		field := new(types.FieldType)
+		field.Tp = byte(v.GetTp())
+		field.Collate = mysql.Collations[byte(v.GetCollation())]
+		field.Decimal = int(v.GetDecimal())
+		field.Flen = int(v.GetColumnLen())
+		field.Flag = uint(v.GetFlag())
+		field.Elems = v.GetElems()
+		fields[i] = field
+	}
+	return fields
 }
 
 // IndexToProto converts a model.IndexInfo to a tipb.IndexInfo.

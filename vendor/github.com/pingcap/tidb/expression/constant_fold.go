@@ -14,27 +14,30 @@
 package expression
 
 import (
-	log "github.com/Sirupsen/logrus"
+	"github.com/ngaut/log"
 )
 
 // FoldConstant does constant folding optimization on an expression.
 func FoldConstant(expr Expression) Expression {
 	scalarFunc, ok := expr.(*ScalarFunction)
-	if !ok {
-		return expr
-	}
-	if _, ok := unFoldableFunctions[scalarFunc.FuncName.L]; ok {
+	if !ok || !scalarFunc.Function.isDeterministic() {
 		return expr
 	}
 	args := scalarFunc.GetArgs()
+	canFold := true
 	for i := 0; i < len(args); i++ {
-		if _, ok := args[i].(*Constant); !ok {
-			return expr
+		foldedArg := FoldConstant(args[i])
+		scalarFunc.GetArgs()[i] = foldedArg
+		if _, ok := foldedArg.(*Constant); !ok {
+			canFold = false
 		}
+	}
+	if !canFold {
+		return expr
 	}
 	value, err := scalarFunc.Eval(nil)
 	if err != nil {
-		log.Warnf("fold constant %s: %s", scalarFunc.ExplainInfo(), err.Error())
+		log.Warnf("There may exist an error during constant folding. The function name is %s, args are %s", scalarFunc.FuncName, args)
 		return expr
 	}
 	return &Constant{

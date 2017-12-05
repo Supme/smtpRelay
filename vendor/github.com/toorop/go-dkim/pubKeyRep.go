@@ -92,9 +92,7 @@ func newPubKeyFromDnsTxt(selector, domain string) (*pubKeyRep, verifyOutput, err
 				return nil, PERMFAIL, ErrVerifyBadKey
 			}
 			pk, err := x509.ParsePKIXPublicKey(un64)
-			if pk, ok := pk.(*rsa.PublicKey); ok {
-				pkr.PubKey = *pk
-			}
+			pkr.PubKey = *pk.(*rsa.PublicKey)
 		case "s":
 			t := strings.Split(strings.ToLower(val), ":")
 			for _, tt := range t {

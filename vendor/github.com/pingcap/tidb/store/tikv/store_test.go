@@ -19,27 +19,33 @@ import (
 
 	"github.com/juju/errors"
 	. "github.com/pingcap/check"
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
-	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/pd-client"
 	"github.com/pingcap/tidb"
-	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/store/tikv/mock-tikv"
 	"github.com/pingcap/tidb/store/tikv/oracle"
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	goctx "golang.org/x/net/context"
 )
 
 type testStoreSuite struct {
-	store *tikvStore
+	cluster *mocktikv.Cluster
+	store   *tikvStore
 }
 
 var _ = Suite(&testStoreSuite{})
 
 func (s *testStoreSuite) SetUpTest(c *C) {
-	store, err := NewMockTikvStore()
-	c.Check(err, IsNil)
-	s.store = store.(*tikvStore)
+	s.cluster = mocktikv.NewCluster()
+	mocktikv.BootstrapWithSingleStore(s.cluster)
+	mvccStore := mocktikv.NewMvccStore()
+	clientFactory := mocktikv.NewRPCClient(s.cluster, mvccStore)
+	pdCli := &codecPDClient{mocktikv.NewPDClient(s.cluster)}
+	store, err := newTikvStore("mock-tikv-store", pdCli, clientFactory, false)
+	c.Assert(err, IsNil)
+	s.store = store
 }
 
 func (s *testStoreSuite) TestParsePath(c *C) {
@@ -189,7 +195,7 @@ func (o *mockOracle) addOffset(d time.Duration) {
 	o.offset += d
 }
 
-func (o *mockOracle) GetTimestamp(goctx.Context) (uint64, error) {
+func (o *mockOracle) GetTimestamp() (uint64, error) {
 	o.Lock()
 	defer o.Unlock()
 
@@ -203,19 +209,6 @@ func (o *mockOracle) GetTimestamp(goctx.Context) (uint64, error) {
 	}
 	o.lastTS = ts
 	return ts, nil
-}
-
-type mockOracleFuture struct {
-	o   *mockOracle
-	ctx goctx.Context
-}
-
-func (m *mockOracleFuture) Wait() (uint64, error) {
-	return m.o.GetTimestamp(m.ctx)
-}
-
-func (o *mockOracle) GetTimestampAsync(ctx goctx.Context) oracle.Future {
-	return &mockOracleFuture{o, ctx}
 }
 
 func (o *mockOracle) IsExpired(lockTimestamp uint64, TTL uint64) bool {
@@ -254,14 +247,32 @@ func (c *busyClient) Close() error {
 	return c.client.Close()
 }
 
-func (c *busyClient) SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+func (c *busyClient) SendKVReq(ctx goctx.Context, addr string, req *kvrpcpb.Request, timeout time.Duration) (*kvrpcpb.Response, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	if c.mu.isBusy {
-		return tikvrpc.GenRegionErrorResp(req, &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}})
+		return &kvrpcpb.Response{
+			RegionError: &errorpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{},
+			},
+		}, nil
 	}
-	return c.client.SendReq(ctx, addr, req)
+	return c.client.SendKVReq(ctx, addr, req, timeout)
+}
+
+func (c *busyClient) SendCopReq(ctx goctx.Context, addr string, req *coprocessor.Request, timeout time.Duration) (*coprocessor.Response, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.mu.isBusy {
+		return &coprocessor.Response{
+			RegionError: &errorpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{},
+			},
+		}, nil
+	}
+	return c.client.SendCopReq(ctx, addr, req, timeout)
 }
 
 type mockPDClient struct {
@@ -282,111 +293,48 @@ func (c *mockPDClient) disable() {
 	c.stop = true
 }
 
-func (c *mockPDClient) GetClusterID(goctx.Context) uint64 {
+func (c *mockPDClient) GetClusterID() uint64 {
 	return 1
 }
 
-func (c *mockPDClient) GetTS(ctx goctx.Context) (int64, int64, error) {
+func (c *mockPDClient) GetTS() (int64, int64, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return 0, 0, errors.Trace(errStopped)
 	}
-	return c.client.GetTS(ctx)
+	return c.client.GetTS()
 }
 
-func (c *mockPDClient) GetTSAsync(ctx goctx.Context) pd.TSFuture {
-	return nil
-}
-
-func (c *mockPDClient) GetRegion(ctx goctx.Context, key []byte) (*metapb.Region, *metapb.Peer, error) {
+func (c *mockPDClient) GetRegion(key []byte) (*metapb.Region, *metapb.Peer, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, nil, errors.Trace(errStopped)
 	}
-	return c.client.GetRegion(ctx, key)
+	return c.client.GetRegion(key)
 }
 
-func (c *mockPDClient) GetRegionByID(ctx goctx.Context, regionID uint64) (*metapb.Region, *metapb.Peer, error) {
+func (c *mockPDClient) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, nil, errors.Trace(errStopped)
 	}
-	return c.client.GetRegionByID(ctx, regionID)
+	return c.client.GetRegionByID(regionID)
 }
 
-func (c *mockPDClient) GetStore(ctx goctx.Context, storeID uint64) (*metapb.Store, error) {
+func (c *mockPDClient) GetStore(storeID uint64) (*metapb.Store, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, errors.Trace(errStopped)
 	}
-	return c.client.GetStore(ctx, storeID)
+	return c.client.GetStore(storeID)
 }
 
 func (c *mockPDClient) Close() {}
-
-type checkRequestClient struct {
-	Client
-	priority pb.CommandPri
-}
-
-func (c *checkRequestClient) SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-	resp, err := c.Client.SendReq(ctx, addr, req)
-	if c.priority != req.Priority {
-		if resp.Get != nil {
-			resp.Get.Error = &pb.KeyError{
-				Abort: "request check error",
-			}
-		}
-	}
-	return resp, err
-}
-
-func (s *testStoreSuite) TestRequestPriority(c *C) {
-	client := &checkRequestClient{
-		Client: s.store.client,
-	}
-	s.store.client = client
-
-	// Cover 2PC commit.
-	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
-	client.priority = pb.CommandPri_High
-	txn.SetOption(kv.Priority, kv.PriorityHigh)
-	err = txn.Set([]byte("key"), []byte("value"))
-	c.Assert(err, IsNil)
-	err = txn.Commit()
-	c.Assert(err, IsNil)
-
-	// Cover the basic Get request.
-	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
-	client.priority = pb.CommandPri_Low
-	txn.SetOption(kv.Priority, kv.PriorityLow)
-	_, err = txn.Get([]byte("key"))
-	c.Assert(err, IsNil)
-
-	// A counter example.
-	client.priority = pb.CommandPri_Low
-	txn.SetOption(kv.Priority, kv.PriorityNormal)
-	_, err = txn.Get([]byte("key"))
-	// err is translated to "try again later" by backoffer, so doesn't check error value here.
-	c.Assert(err, NotNil)
-
-	// Cover Seek request.
-	client.priority = pb.CommandPri_High
-	txn.SetOption(kv.Priority, kv.PriorityHigh)
-	iter, err := txn.Seek([]byte("key"))
-	c.Assert(err, IsNil)
-	for iter.Valid() {
-		c.Assert(iter.Next(), IsNil)
-	}
-	iter.Close()
-}

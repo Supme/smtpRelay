@@ -9,16 +9,17 @@ import (
 	"regexp"
 )
 
-// ToDo X-Postmaster-Msgtype
 var (
-	messageIDre = regexp.MustCompile(`[Mm][Ee][Ss][Ss][Aa][Gg][Ee].?[Ii][Dd]:\s*<(.+)>`)
+	messageIDre   = regexp.MustCompile(`[Mm][Ee][Ss][Ss][Aa][Gg][Ee].?[Ii][Dd]:\s*(.+)`)
+	messageTypeRe = regexp.MustCompile(`[Xx].?[Pp][Oo][Ss][Tt][Mm][Aa][Ss][Tt][Ee][Rr].?[Mm][Ss][Gg][Tt][Yy][Pp][Ee]:\s*(.+)`)
 )
 
 type env struct {
-	rcpts     []smtpd.MailAddress
-	from      smtpd.MailAddress
-	data      bytes.Buffer
-	messageID string
+	rcpts       []smtpd.MailAddress
+	from        smtpd.MailAddress
+	data        bytes.Buffer
+	messageID   string
+	messageType string
 }
 
 func (e *env) AddRecipient(rcpt smtpd.MailAddress) error {
@@ -38,12 +39,16 @@ func (e *env) Write(line []byte) error {
 	if m != nil && len(m) == 2 {
 		e.messageID = string(m[1])
 	}
+	t := messageTypeRe.FindSubmatch(line)
+	if t != nil && len(t) == 2 {
+		e.messageType = string(t[1])
+	}
 	_, err := e.data.Write(line)
 	return err
 }
 
 func (e *env) Close() error {
-	model.AddToQueue(e.messageID, e.from, e.rcpts, e.data.Bytes())
+	model.AddToQueue(e.messageType, e.messageID, e.from, e.rcpts, e.data.Bytes())
 	return nil
 }
 

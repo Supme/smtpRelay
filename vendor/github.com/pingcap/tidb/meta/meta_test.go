@@ -135,49 +135,13 @@ func (s *testSuite) TestMeta(c *C) {
 	tables, err := t.ListTables(1)
 	c.Assert(err, IsNil)
 	c.Assert(tables, DeepEquals, []*model.TableInfo{tbInfo, tbInfo2})
-	// Generate an auto id.
-	n, err = t.GenAutoTableID(1, 2, 10)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(10))
-	// Make sure the auto id key-value entry is there.
-	n, err = t.GetAutoTableID(1, 2)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(10))
 
-	err = t.DropTable(1, 2, true)
+	err = t.DropTable(1, 2)
 	c.Assert(err, IsNil)
-	// Make sure auto id key-value entry is gone.
-	n, err = t.GetAutoTableID(1, 2)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(0))
 
 	tables, err = t.ListTables(1)
 	c.Assert(err, IsNil)
 	c.Assert(tables, DeepEquals, []*model.TableInfo{tbInfo})
-
-	// Test case for drop a table without delete auto id key-value entry.
-	tid := int64(100)
-	tbInfo100 := &model.TableInfo{
-		ID:   tid,
-		Name: model.NewCIStr("t_rename"),
-	}
-	// Create table.
-	err = t.CreateTable(1, tbInfo100)
-	c.Assert(err, IsNil)
-	// Update auto id.
-	n, err = t.GenAutoTableID(1, tid, 10)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(10))
-	n, err = t.GetAutoTableID(1, tid)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(10))
-	// Drop table without touch auto id key-value entry.
-	err = t.DropTable(1, 100, false)
-	c.Assert(err, IsNil)
-	// Make sure that auto id key-value entry is still there.
-	n, err = t.GetAutoTableID(1, tid)
-	c.Assert(err, IsNil)
-	c.Assert(n, Equals, int64(10))
 
 	err = t.DropDatabase(1)
 	c.Assert(err, IsNil)
@@ -266,6 +230,13 @@ func (s *testSuite) TestDDL(c *C) {
 
 	t := meta.NewMeta(txn)
 
+	owner := &model.Owner{OwnerID: "1"}
+	err = t.SetDDLJobOwner(owner)
+	c.Assert(err, IsNil)
+	ov, err := t.GetDDLJobOwner()
+	c.Assert(err, IsNil)
+	c.Assert(owner, DeepEquals, ov)
+
 	job := &model.Job{ID: 1}
 	err = t.EnQueueDDLJob(job)
 	c.Assert(err, IsNil)
@@ -310,6 +281,40 @@ func (s *testSuite) TestDDL(c *C) {
 		c.Assert(job.ID, Greater, lastID)
 		lastID = job.ID
 	}
+
+	// DDL background job test
+	err = t.SetBgJobOwner(owner)
+	c.Assert(err, IsNil)
+	ov, err = t.GetBgJobOwner()
+	c.Assert(err, IsNil)
+	c.Assert(owner, DeepEquals, ov)
+
+	bgJob := &model.Job{ID: 1}
+	err = t.EnQueueBgJob(bgJob)
+	c.Assert(err, IsNil)
+	n, err = t.BgJobQueueLen()
+	c.Assert(err, IsNil)
+	c.Assert(n, Equals, int64(1))
+
+	v, err = t.GetBgJob(0)
+	c.Assert(err, IsNil)
+	c.Assert(v, DeepEquals, bgJob)
+	v, err = t.GetBgJob(1)
+	c.Assert(err, IsNil)
+	c.Assert(v, IsNil)
+	bgJob.ID = 2
+	err = t.UpdateBgJob(0, bgJob)
+	c.Assert(err, IsNil)
+
+	v, err = t.DeQueueBgJob()
+	c.Assert(err, IsNil)
+	c.Assert(v, DeepEquals, bgJob)
+
+	err = t.AddHistoryBgJob(bgJob)
+	c.Assert(err, IsNil)
+	v, err = t.GetHistoryBgJob(2)
+	c.Assert(err, IsNil)
+	c.Assert(v, DeepEquals, bgJob)
 
 	err = txn.Commit()
 	c.Assert(err, IsNil)

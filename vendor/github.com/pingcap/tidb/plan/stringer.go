@@ -26,7 +26,7 @@ func ToString(p Plan) string {
 
 func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 	switch in.(type) {
-	case *LogicalJoin, *Union, *PhysicalHashJoin, *PhysicalHashSemiJoin, *LogicalApply, *PhysicalApply, *PhysicalMergeJoin, *PhysicalIndexJoin:
+	case *Join, *Union, *PhysicalHashJoin, *PhysicalHashSemiJoin, *Apply, *PhysicalApply:
 		idxs = append(idxs, len(strs))
 	}
 
@@ -42,6 +42,8 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		str = fmt.Sprintf("Index(%s.%s)%v", x.Table.Name.L, x.Index.Name.L, x.Ranges)
 	case *PhysicalTableScan:
 		str = fmt.Sprintf("Table(%s)", x.Table.Name.L)
+	case *PhysicalDummyScan:
+		str = "Dummy"
 	case *PhysicalHashJoin:
 		last := len(idxs) - 1
 		idx := idxs[last]
@@ -69,26 +71,7 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		} else {
 			str = "SemiJoin{" + strings.Join(children, "->") + "}"
 		}
-		if UseDAGPlanBuilder(x.ctx) {
-			for _, eq := range x.EqualConditions {
-				l := eq.GetArgs()[0].String()
-				r := eq.GetArgs()[1].String()
-				str += fmt.Sprintf("(%s,%s)", l, r)
-			}
-		}
-	case *PhysicalMergeJoin:
-		last := len(idxs) - 1
-		idx := idxs[last]
-		children := strs[idx:]
-		strs = strs[:idx]
-		idxs = idxs[:last]
-		str = "MergeJoin{" + strings.Join(children, "->") + "}"
-		for _, eq := range x.EqualConditions {
-			l := eq.GetArgs()[0].String()
-			r := eq.GetArgs()[1].String()
-			str += fmt.Sprintf("(%s,%s)", l, r)
-		}
-	case *LogicalApply, *PhysicalApply:
+	case *Apply, *PhysicalApply:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
@@ -110,7 +93,7 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		if x.ExecLimit != nil {
 			str += fmt.Sprintf(" + Limit(%v) + Offset(%v)", x.ExecLimit.Count, x.ExecLimit.Offset)
 		}
-	case *LogicalJoin:
+	case *Join:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
@@ -137,15 +120,8 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		}
 	case *Selection:
 		str = "Selection"
-		if UseDAGPlanBuilder(x.ctx) {
-			str = fmt.Sprintf("Sel(%s)", x.Conditions)
-		}
 	case *Projection:
 		str = "Projection"
-	case *TopN:
-		str = fmt.Sprintf("TopN(%s,%d,%d)", x.ByItems, x.Offset, x.Count)
-	case *TableDual:
-		str = "Dual"
 	case *PhysicalAggregation:
 		switch x.AggType {
 		case StreamedAgg:
@@ -153,7 +129,7 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		default:
 			str = "HashAgg"
 		}
-	case *LogicalAggregation:
+	case *Aggregation:
 		str = "Aggr("
 		for i, aggFunc := range x.AggFuncs {
 			str += aggFunc.String()
@@ -164,43 +140,6 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		str += ")"
 	case *Cache:
 		str = "Cache"
-	case *PhysicalTableReader:
-		str = fmt.Sprintf("TableReader(%s)", ToString(x.tablePlan))
-	case *PhysicalIndexReader:
-		str = fmt.Sprintf("IndexReader(%s)", ToString(x.indexPlan))
-	case *PhysicalIndexLookUpReader:
-		str = fmt.Sprintf("IndexLookUp(%s, %s)", ToString(x.indexPlan), ToString(x.tablePlan))
-	case *PhysicalUnionScan:
-		str = fmt.Sprintf("UnionScan(%s)", x.Conditions)
-	case *PhysicalIndexJoin:
-		last := len(idxs) - 1
-		idx := idxs[last]
-		children := strs[idx:]
-		strs = strs[:idx]
-		idxs = idxs[:last]
-		str = "IndexJoin{" + strings.Join(children, "->") + "}"
-		for i := range x.OuterJoinKeys {
-			l := x.OuterJoinKeys[i]
-			r := x.InnerJoinKeys[i]
-			str += fmt.Sprintf("(%s,%s)", l, r)
-		}
-	case *Analyze:
-		str = "Analyze{"
-		var children []string
-		for _, idx := range x.IdxTasks {
-			children = append(children, fmt.Sprintf("Index(%t, %s.%s)", idx.PushDown, idx.TableInfo.Name.O, idx.IndexInfo.Name.O))
-		}
-		for _, col := range x.ColTasks {
-			var colNames []string
-			if col.PKInfo != nil {
-				colNames = append(colNames, fmt.Sprintf("%s.%s", col.TableInfo.Name.O, col.PKInfo.Name.O))
-			}
-			for _, c := range col.ColsInfo {
-				colNames = append(colNames, fmt.Sprintf("%s.%s", col.TableInfo.Name.O, c.Name.O))
-			}
-			children = append(children, fmt.Sprintf("Table(%t, %s)", col.PushDown, strings.Join(colNames, ", ")))
-		}
-		str = str + strings.Join(children, ",") + "}"
 	default:
 		str = fmt.Sprintf("%T", in)
 	}

@@ -52,7 +52,6 @@ var (
 // ValueExpr is the simple value expression.
 type ValueExpr struct {
 	exprNode
-	projectionOffset int
 }
 
 // NewValueExpr creates a ValueExpr with value, and sets default field type.
@@ -63,18 +62,7 @@ func NewValueExpr(value interface{}) *ValueExpr {
 	ve := &ValueExpr{}
 	ve.SetValue(value)
 	types.DefaultTypeForValue(value, &ve.Type)
-	ve.projectionOffset = -1
 	return ve
-}
-
-// SetProjectionOffset sets ValueExpr.projectionOffset for logical plan builder.
-func (n *ValueExpr) SetProjectionOffset(offset int) {
-	n.projectionOffset = offset
-}
-
-// GetProjectionOffset returns ValueExpr.projectionOffset.
-func (n *ValueExpr) GetProjectionOffset() int {
-	return n.projectionOffset
 }
 
 // Accept implements Node interface.
@@ -343,18 +331,6 @@ func (n *ColumnName) Accept(v Visitor) (Node, bool) {
 	}
 	n = newNode.(*ColumnName)
 	return v.Leave(n)
-}
-
-// String implements Stringer interface.
-func (n *ColumnName) String() string {
-	result := n.Name.L
-	if n.Table.L != "" {
-		result = n.Table.L + "." + result
-	}
-	if n.Schema.L != "" {
-		result = n.Schema.L + "." + result
-	}
-	return result
 }
 
 // ColumnNameExpr represents a column name expression.
@@ -713,7 +689,7 @@ func (n *UnaryOperationExpr) Accept(v Visitor) (Node, bool) {
 // ValuesExpr is the expression used in INSERT VALUES.
 type ValuesExpr struct {
 	exprNode
-	// Column is column name.
+	// model.CIStr is column name.
 	Column *ColumnNameExpr
 }
 

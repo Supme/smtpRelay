@@ -116,12 +116,12 @@ type ResultField struct {
 	TableAsName  model.CIStr
 	DBName       model.CIStr
 
-	// Expr represents the expression for the result field. If it is generated from a select field, it would
+	// The expression for the result field. If it is generated from a select field, it would
 	// be the expression of that select field, otherwise the type would be ValueExpr and value
 	// will be set for every retrieved row.
 	Expr      ExprNode
 	TableName *TableName
-	// Referenced indicates the result field has been referenced or not.
+	// Whether this result field has been referenced.
 	// If not, we don't need to get the values.
 	Referenced bool
 }
@@ -145,7 +145,7 @@ type RecordSet interface {
 	Close() error
 }
 
-// ResultSetNode interface has a ResultFields property, represents a Node that returns result set.
+// The ResultSetNode interface has a ResultFields property, represents a Node that returns result set.
 // Implementations include SelectStmt, SubqueryExpr, TableSource, TableName and Join.
 type ResultSetNode interface {
 	Node
@@ -153,13 +153,6 @@ type ResultSetNode interface {
 	GetResultFields() []*ResultField
 	// SetResultFields sets result fields.
 	SetResultFields(fields []*ResultField)
-}
-
-// SensitiveStmtNode overloads StmtNode and provides a SecureText method.
-type SensitiveStmtNode interface {
-	StmtNode
-	// SecureText is different from Text that it hide password information.
-	SecureText() string
 }
 
 // Statement is an interface for SQL execution.
@@ -173,15 +166,6 @@ type Statement interface {
 
 	// Exec executes SQL and gets a Recordset.
 	Exec(ctx context.Context) (RecordSet, error)
-
-	// IsPrepared returns whether this statement is prepared statement.
-	IsPrepared() bool
-
-	// IsReadOnly returns if the statement is read only. For example: SelectStmt without lock.
-	IsReadOnly() bool
-
-	// RebuildPlan rebuilds the plan of the statement.
-	RebuildPlan() error
 }
 
 // Visitor visits a Node.

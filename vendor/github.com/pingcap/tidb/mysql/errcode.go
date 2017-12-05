@@ -882,21 +882,4 @@ const (
 	ErrMustChangePasswordLogin                                      = 1862
 	ErrRowInWrongPartition                                          = 1863
 	ErrErrorLast                                                    = 1863
-	ErrBadGeneratedColumn                                           = 3105
-	ErrUnsupportedOnGeneratedColumn                                 = 3106
-	ErrGeneratedColumnNonPrior                                      = 3107
-	ErrDependentByGeneratedColumn                                   = 3108
-	ErrInvalidJSONText                                              = 3140
-	ErrInvalidJSONPath                                              = 3143
-	ErrInvalidJSONData                                              = 3146
-	ErrJSONUsedAsKey                                                = 3152
-
-	// TiKV/PD errors.
-	ErrPDServerTimeout    = 9001
-	ErrTiKVServerTimeout  = 9002
-	ErrTiKVServerBusy     = 9003
-	ErrResolveLockTimeout = 9004
-	ErrRegionUnavaiable   = 9005
-
-	ErrTxnTooLarge = 9500
 )

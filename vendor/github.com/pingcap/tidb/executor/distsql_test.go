@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"runtime/pprof"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	. "github.com/pingcap/check"
@@ -30,15 +29,15 @@ import (
 	"github.com/pingcap/tidb/util/testkit"
 )
 
-// TestIndexDoubleReadClose checks that when a index double read returns before reading all the rows, the goroutine doesn't
+// This test checks that when a index double read returns before reading all the rows, the goroutine doesn't
 // leak. For testing distsql with multiple regions, we need to manually split a mock TiKV.
 func (s *testSuite) TestIndexDoubleReadClose(c *C) {
 	if _, ok := s.store.GetClient().(*tikv.CopClient); !ok {
 		// Make sure the store is tikv store.
 		return
 	}
-	originSize := atomic.LoadInt32(&executor.LookupTableTaskChannelSize)
-	atomic.StoreInt32(&executor.LookupTableTaskChannelSize, 1)
+	originSize := executor.LookupTableTaskChannelSize
+	executor.LookupTableTaskChannelSize = 1
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("set @@tidb_index_lookup_size = '10'")
 	tk.MustExec("use test")
@@ -61,7 +60,7 @@ func (s *testSuite) TestIndexDoubleReadClose(c *C) {
 	rs.Close()
 	time.Sleep(time.Millisecond * 50)
 	c.Check(checkGoroutineExists(keyword), IsFalse)
-	atomic.StoreInt32(&executor.LookupTableTaskChannelSize, originSize)
+	executor.LookupTableTaskChannelSize = originSize
 }
 
 func checkGoroutineExists(keyword string) bool {
@@ -73,7 +72,6 @@ func checkGoroutineExists(keyword string) bool {
 }
 
 func (s *testSuite) TestCopClientSend(c *C) {
-	c.Skip("not stable")
 	if _, ok := s.store.GetClient().(*tikv.CopClient); !ok {
 		// Make sure the store is tikv store.
 		return
@@ -97,7 +95,8 @@ func (s *testSuite) TestCopClientSend(c *C) {
 	tblID := tbl.Meta().ID
 
 	// Split the table.
-	s.cluster.SplitTable(s.mvccStore, tblID, 100)
+	cli := tikv.GetMockTiKVClient(s.store)
+	cli.Cluster.SplitTable(cli.MvccStore, tblID, 100)
 
 	// Send coprocessor request when the table split.
 	rss, err := tk.Se.Execute("select sum(id) from copclient")
@@ -110,9 +109,9 @@ func (s *testSuite) TestCopClientSend(c *C) {
 
 	// Split one region.
 	key := tablecodec.EncodeRowKeyWithHandle(tblID, 500)
-	region, _ := s.cluster.GetRegionByKey([]byte(key))
-	peerID := s.cluster.AllocID()
-	s.cluster.Split(region.GetId(), s.cluster.AllocID(), key, []uint64{peerID}, peerID)
+	region, _ := cli.Cluster.GetRegionByKey([]byte(key))
+	peerID := cli.Cluster.AllocID()
+	cli.Cluster.Split(region.GetId(), cli.Cluster.AllocID(), key, []uint64{peerID}, peerID)
 
 	// Check again.
 	rss, err = tk.Se.Execute("select sum(id) from copclient")
@@ -130,6 +129,7 @@ func (s *testSuite) TestCopClientSend(c *C) {
 	_, err = rs.Next()
 	c.Assert(err, IsNil)
 	rs.Close()
-	keyword := "(*copIterator).work"
+	time.Sleep(time.Millisecond * 10)
+	keyword := "copIterator"
 	c.Check(checkGoroutineExists(keyword), IsFalse)
 }

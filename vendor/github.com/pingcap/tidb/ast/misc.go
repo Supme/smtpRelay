@@ -14,14 +14,11 @@
 package ast
 
 import (
-	"bytes"
 	"fmt"
-	"strings"
 
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/util/auth"
 )
 
 var (
@@ -41,31 +38,12 @@ var (
 	_ StmtNode = &SetPwdStmt{}
 	_ StmtNode = &SetStmt{}
 	_ StmtNode = &UseStmt{}
+	_ StmtNode = &AnalyzeTableStmt{}
 	_ StmtNode = &FlushStmt{}
 	_ StmtNode = &KillStmt{}
 
 	_ Node = &PrivElem{}
 	_ Node = &VariableAssignment{}
-)
-
-// Isolation level constants.
-const (
-	ReadCommitted   = "READ-COMMITTED"
-	ReadUncommitted = "READ-UNCOMMITTED"
-	Serializable    = "SERIALIZABLE"
-	RepeatableRead  = "REPEATABLE-READ"
-
-	// Valid formats for explain statement.
-	ExplainFormatROW = "row"
-	ExplainFormatDOT = "dot"
-)
-
-var (
-	// ExplainFormats stores the valid formats for explain statement, used by validator.
-	ExplainFormats = []string{
-		ExplainFormatROW,
-		ExplainFormatDOT,
-	}
 )
 
 // TypeOpt is used for parsing data type option from SQL.
@@ -83,7 +61,7 @@ type FloatOpt struct {
 
 // AuthOption is used for parsing create use statement.
 type AuthOption struct {
-	// ByAuthString set as true, if AuthString is used for authorization. Otherwise, authorization is done by HashString.
+	// AuthString/HashString can be empty, so we need to decide which one to use.
 	ByAuthString bool
 	AuthString   string
 	HashString   string
@@ -96,8 +74,7 @@ type AuthOption struct {
 type ExplainStmt struct {
 	stmtNode
 
-	Stmt   StmtNode
-	Format string
+	Stmt StmtNode
 }
 
 // Accept implements Node Accept interface.
@@ -168,7 +145,6 @@ type ExecuteStmt struct {
 
 	Name      string
 	UsingVars []ExprNode
-	ExecID    uint32
 }
 
 // Accept implements Node Accept interface.
@@ -286,7 +262,6 @@ type VariableAssignment struct {
 	IsGlobal bool
 	IsSystem bool
 
-	// ExtendValue is a way to store extended info.
 	// VariableAssignment should be able to store information for SetCharset/SetPWD Stmt.
 	// For SetCharsetStmt, Value is charset, ExtendValue is collation.
 	// TODO: Use SetStmt to implement set password statement.
@@ -324,8 +299,9 @@ type FlushStmt struct {
 
 	Tp              FlushStmtType // Privileges/Tables/...
 	NoWriteToBinLog bool
-	Tables          []*TableName // For FlushTableStmt, if Tables is empty, it means flush all tables.
-	ReadLock        bool
+	// For FlushTableStmt, if Tables is empty, it means flush all tables.
+	Tables   []*TableName
+	ReadLock bool
 }
 
 // Accept implements Node Accept interface.
@@ -342,12 +318,10 @@ func (n *FlushStmt) Accept(v Visitor) (Node, bool) {
 type KillStmt struct {
 	stmtNode
 
-	// Query indicates whether terminate a single query on this connection or the whole connection.
 	// If Query is true, terminates the statement the connection is currently executing, but leaves the connection itself intact.
 	// If Query is false, terminates the connection associated with the given ConnectionID, after terminating any statement the connection is executing.
 	Query        bool
 	ConnectionID uint64
-	// TiDBExtension is used to indicate whether the user knows he is sending kill statement to the right tidb-server.
 	// When the SQL grammar is "KILL TIDB [CONNECTION | QUERY] connectionID", TiDBExtension will be set.
 	// It's a special grammar extension in TiDB. This extension exists because, when the connection is:
 	// client -> LVS proxy -> TiDB, and type Ctrl+C in client, the following action will be executed:
@@ -418,13 +392,8 @@ func (n *SetCharsetStmt) Accept(v Visitor) (Node, bool) {
 type SetPwdStmt struct {
 	stmtNode
 
-	User     *auth.UserIdentity
+	User     string
 	Password string
-}
-
-// SecureText implements SensitiveStatement interface.
-func (n *SetPwdStmt) SecureText() string {
-	return fmt.Sprintf("set password for user %s", n.User)
 }
 
 // Accept implements Node Accept interface.
@@ -439,22 +408,8 @@ func (n *SetPwdStmt) Accept(v Visitor) (Node, bool) {
 
 // UserSpec is used for parsing create user statement.
 type UserSpec struct {
-	User    *auth.UserIdentity
+	User    string
 	AuthOpt *AuthOption
-}
-
-// SecurityString formats the UserSpec without password information.
-func (u *UserSpec) SecurityString() string {
-	withPassword := false
-	if opt := u.AuthOpt; opt != nil {
-		if len(opt.AuthString) > 0 || len(opt.HashString) > 0 {
-			withPassword = true
-		}
-	}
-	if withPassword {
-		return fmt.Sprintf("{%s password = ***}", u.User)
-	}
-	return u.User.String()
 }
 
 // CreateUserStmt creates user account.
@@ -476,17 +431,6 @@ func (n *CreateUserStmt) Accept(v Visitor) (Node, bool) {
 	return v.Leave(n)
 }
 
-// SecureText implements SensitiveStatement interface.
-func (n *CreateUserStmt) SecureText() string {
-	var buf bytes.Buffer
-	buf.WriteString("create user")
-	for _, user := range n.Specs {
-		buf.WriteString(" ")
-		buf.WriteString(user.SecurityString())
-	}
-	return buf.String()
-}
-
 // AlterUserStmt modifies user account.
 // See https://dev.mysql.com/doc/refman/5.7/en/alter-user.html
 type AlterUserStmt struct {
@@ -495,17 +439,6 @@ type AlterUserStmt struct {
 	IfExists    bool
 	CurrentAuth *AuthOption
 	Specs       []*UserSpec
-}
-
-// SecureText implements SensitiveStatement interface.
-func (n *AlterUserStmt) SecureText() string {
-	var buf bytes.Buffer
-	buf.WriteString("alter user")
-	for _, user := range n.Specs {
-		buf.WriteString(" ")
-		buf.WriteString(user.SecurityString())
-	}
-	return buf.String()
 }
 
 // Accept implements Node Accept interface.
@@ -524,7 +457,7 @@ type DropUserStmt struct {
 	stmtNode
 
 	IfExists bool
-	UserList []*auth.UserIdentity
+	UserList []string
 }
 
 // Accept implements Node Accept interface.
@@ -568,8 +501,6 @@ type AdminStmtType int
 const (
 	AdminShowDDL = iota + 1
 	AdminCheckTable
-	AdminShowDDLJobs
-	AdminCancelDDLJobs
 )
 
 // AdminStmt is the struct for Admin statement.
@@ -578,7 +509,6 @@ type AdminStmt struct {
 
 	Tp     AdminStmtType
 	Tables []*TableName
-	JobIDs []int64
 }
 
 // Accept implements Node Accpet interface.
@@ -694,17 +624,6 @@ type GrantStmt struct {
 	WithGrant  bool
 }
 
-// SecureText implements SensitiveStatement interface.
-func (n *GrantStmt) SecureText() string {
-	text := n.text
-	// Filter "identified by xxx" because it would expose password information.
-	idx := strings.Index(strings.ToLower(text), "identified")
-	if idx > 0 {
-		text = text[:idx]
-	}
-	return text
-}
-
 // Accept implements Node Accept interface.
 func (n *GrantStmt) Accept(v Visitor) (Node, bool) {
 	newNode, skipChildren := v.Enter(n)
@@ -739,7 +658,7 @@ func (i Ident) Full(ctx context.Context) (full Ident) {
 	return
 }
 
-// String implements fmt.Stringer interface.
+// String implements fmt.Stringer interface
 func (i Ident) String() string {
 	if i.Schema.O == "" {
 		return i.Name.O
@@ -747,19 +666,41 @@ func (i Ident) String() string {
 	return fmt.Sprintf("%s.%s", i.Schema, i.Name)
 }
 
+// AnalyzeTableStmt is used to create table statistics.
+type AnalyzeTableStmt struct {
+	stmtNode
+
+	TableNames []*TableName
+}
+
+// Accept implements Node Accept interface.
+func (n *AnalyzeTableStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*AnalyzeTableStmt)
+	for i, val := range n.TableNames {
+		node, ok := val.Accept(v)
+		if !ok {
+			return n, false
+		}
+		n.TableNames[i] = node.(*TableName)
+	}
+	return v.Leave(n)
+}
+
 // SelectStmtOpts wrap around select hints and switches
 type SelectStmtOpts struct {
 	Distinct      bool
 	SQLCache      bool
 	CalcFoundRows bool
-	Priority      mysql.PriorityEnum
 	TableHints    []*TableOptimizerHint
 }
 
 // TableOptimizerHint is Table level optimizer hint
 type TableOptimizerHint struct {
 	node
-	// HintName is the name or alias of the table(s) which the hint will affect.
 	// Table hints has no schema info
 	// It allows only table name or alias (if table has an alias)
 	HintName model.CIStr

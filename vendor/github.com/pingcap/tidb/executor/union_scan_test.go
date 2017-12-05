@@ -16,9 +16,14 @@ package executor_test
 import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/util/testkit"
+	"github.com/pingcap/tidb/util/testleak"
 )
 
 func (s *testSuite) TestDirtyTransaction(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists t")
@@ -54,13 +59,5 @@ func (s *testSuite) TestDirtyTransaction(c *C) {
 	tk.MustExec("truncate table t")
 	tk.MustExec("insert t values (3, 4)")
 	tk.MustQuery("select * from t").Check(testkit.Rows("3 4"))
-	tk.MustExec("commit")
-
-	tk.MustExec("drop table if exists t")
-	tk.MustExec("create table t (a int, b int)")
-	tk.MustExec("insert t values (2, 3), (4, 5), (6, 7)")
-	tk.MustExec("begin")
-	tk.MustExec("insert t values (0, 1)")
-	tk.MustQuery("select * from t where b = 3").Check(testkit.Rows("2 3"))
-	tk.MustExec("commit")
+	tk.Exec("abort")
 }

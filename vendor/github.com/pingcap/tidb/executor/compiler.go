@@ -14,62 +14,41 @@
 package executor
 
 import (
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/plan"
 )
 
-// Compiler compiles an ast.StmtNode to a physical plan.
+// Compiler compiles an ast.StmtNode to a stmt.Statement.
 type Compiler struct {
 }
 
-// Compile compiles an ast.StmtNode to a physical plan.
-func (c *Compiler) Compile(ctx context.Context, stmtNode ast.StmtNode) (*ExecStmt, error) {
-	infoSchema := GetInfoSchema(ctx)
-	if err := plan.Preprocess(stmtNode, infoSchema, ctx); err != nil {
+// Compile compiles an ast.StmtNode to an ast.Statement.
+// After preprocessed and validated, it will be optimized to a plan,
+// then wrappped to an adapter *statement as stmt.Statement.
+func (c *Compiler) Compile(ctx context.Context, node ast.StmtNode) (ast.Statement, error) {
+	is := GetInfoSchema(ctx)
+	if err := plan.Preprocess(node, is, ctx); err != nil {
 		return nil, errors.Trace(err)
 	}
 	// Validate should be after NameResolve.
-	if err := plan.Validate(stmtNode, false); err != nil {
+	if err := plan.Validate(node, false); err != nil {
 		return nil, errors.Trace(err)
 	}
-
-	finalPlan, err := plan.Optimize(ctx, stmtNode, infoSchema)
+	p, err := plan.Optimize(ctx, node, is)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
-	// check whether the stmt is read only
-	readOnly := false
-	if e, ok := stmtNode.(*ast.ExecuteStmt); ok {
-		vars := ctx.GetSessionVars()
-
-		if id, ok := vars.PreparedStmtNameToID[e.Name]; ok {
-			v := vars.PreparedStmts[id]
-			if v == nil {
-				return nil, errors.Trace(ErrStmtNotFound)
-			}
-
-			prepared := v.(*Prepared)
-			readOnly = ast.IsReadOnly(prepared.Stmt)
-		}
-	} else {
-		readOnly = ast.IsReadOnly(stmtNode)
+	stmtCount(node, p)
+	sa := &statement{
+		is:   is,
+		plan: p,
+		text: node.Text(),
 	}
-
-	return &ExecStmt{
-		InfoSchema: infoSchema,
-		Plan:       finalPlan,
-		Expensive:  stmtCount(stmtNode, finalPlan, ctx.GetSessionVars().InRestrictedSQL),
-		Cacheable:  plan.Cacheable(stmtNode),
-		Text:       stmtNode.Text(),
-		ReadOnly:   readOnly,
-		Ctx:        ctx,
-		StmtNode:   stmtNode,
-	}, nil
+	return sa, nil
 }
 
 // GetInfoSchema gets TxnCtx InfoSchema if snapshot schema is not set,

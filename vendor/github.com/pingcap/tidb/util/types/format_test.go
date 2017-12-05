@@ -16,12 +16,9 @@ package types
 import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/util/mock"
 )
 
 func (s *testTimeSuite) TestTimeFormatMethod(c *C) {
-	sc := mock.NewContext().GetSessionVars().StmtCtx
-	sc.IgnoreZeroInDate = true
 	tblDate := []struct {
 		Input  string
 		Format string
@@ -65,7 +62,7 @@ func (s *testTimeSuite) TestTimeFormatMethod(c *C) {
 		},
 	}
 	for i, t := range tblDate {
-		tm, err := ParseTime(sc, t.Input, mysql.TypeDatetime, 6)
+		tm, err := ParseTime(t.Input, mysql.TypeDatetime, 6)
 		c.Assert(err, IsNil, Commentf("parse time fail: %s", t.Input))
 
 		str, err := tm.DateFormat(t.Format)
@@ -76,9 +73,7 @@ func (s *testTimeSuite) TestTimeFormatMethod(c *C) {
 }
 
 func (s *testTimeSuite) TestStrToDate(c *C) {
-	sc := mock.NewContext().GetSessionVars().StmtCtx
-	sc.IgnoreZeroInDate = true
-	tests := []struct {
+	testcases := []struct {
 		input  string
 		format string
 		expect TimeInternal
@@ -103,13 +98,13 @@ func (s *testTimeSuite) TestStrToDate(c *C) {
 		{`12:00:00 AM`, `%h:%i:%s %p`, FromDate(0, 0, 0, 0, 0, 0, 0)},
 		{`12:00:00 PM`, `%h:%i:%s %p`, FromDate(0, 0, 0, 12, 0, 0, 0)},
 	}
-	for i, tt := range tests {
+	for i, test := range testcases {
 		var t Time
-		c.Assert(t.StrToDate(sc, tt.input, tt.format), IsTrue, Commentf("no.%d failed", i))
-		c.Assert(t.Time, Equals, tt.expect, Commentf("no.%d failed", i))
+		c.Assert(t.StrToDate(test.input, test.format), IsTrue, Commentf("no.%d failed", i))
+		c.Assert(t.Time, Equals, test.expect, Commentf("no.%d failed", i))
 	}
 
-	errTests := []struct {
+	errcases := []struct {
 		input  string
 		format string
 	}{
@@ -121,8 +116,8 @@ func (s *testTimeSuite) TestStrToDate(c *C) {
 		{`18`, `%l`},
 		{`00:21:22 AM`, `%h:%i:%s %p`},
 	}
-	for _, tt := range errTests {
+	for _, test := range errcases {
 		var t Time
-		c.Assert(t.StrToDate(sc, tt.input, tt.format), IsFalse)
+		c.Assert(t.StrToDate(test.input, test.format), IsFalse)
 	}
 }

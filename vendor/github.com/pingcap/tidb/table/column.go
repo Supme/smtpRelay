@@ -21,24 +21,20 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/ast"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/util/hack"
 	"github.com/pingcap/tidb/util/types"
-	"github.com/pingcap/tidb/util/types/json"
 )
 
 // Column provides meta data describing a table column.
-type Column struct {
-	*model.ColumnInfo
-	// If this column is a generated column, the expression will be stored here.
-	GeneratedExpr ast.ExprNode
-}
+type Column model.ColumnInfo
+
+// PrimaryKeyName defines primary key name.
+const PrimaryKeyName = "PRIMARY"
 
 // String implements fmt.Stringer interface.
 func (c *Column) String() string {
@@ -53,9 +49,8 @@ func (c *Column) String() string {
 }
 
 // ToInfo casts Column to model.ColumnInfo
-// NOTE: DONT modify return value.
 func (c *Column) ToInfo() *model.ColumnInfo {
-	return c.ColumnInfo
+	return (*model.ColumnInfo)(c)
 }
 
 // FindCol finds column in cols by name.
@@ -70,10 +65,7 @@ func FindCol(cols []*Column, name string) *Column {
 
 // ToColumn converts a *model.ColumnInfo to *Column.
 func ToColumn(col *model.ColumnInfo) *Column {
-	return &Column{
-		col,
-		nil,
-	}
+	return (*Column)(col)
 }
 
 // FindCols finds columns in cols by names.
@@ -103,39 +95,19 @@ func FindOnUpdateCols(cols []*Column) []*Column {
 	return rcols
 }
 
-// truncateTrailingSpaces trancates trailing spaces for CHAR[(M)] column.
-// fix: https://github.com/pingcap/tidb/issues/3660
-func truncateTrailingSpaces(v *types.Datum) {
-	if v.Kind() == types.KindNull {
-		return
-	}
-	b := v.GetBytes()
-	len := len(b)
-	for len > 0 && b[len-1] == ' ' {
-		len--
-	}
-	b = b[:len]
-	v.SetString(hack.String(b))
-}
-
 // CastValues casts values based on columns type.
 func CastValues(ctx context.Context, rec []types.Datum, cols []*Column, ignoreErr bool) (err error) {
-	sc := ctx.GetSessionVars().StmtCtx
 	for _, c := range cols {
 		var converted types.Datum
 		converted, err = CastValue(ctx, rec[c.Offset], c.ToInfo())
 		if err != nil {
 			if ignoreErr {
-				sc.AppendWarning(err)
 				log.Warnf("cast values failed:%v", err)
 			} else {
 				return errors.Trace(err)
 			}
 		}
 		rec[c.Offset] = converted
-		if c.Tp == mysql.TypeString && !types.IsBinaryStr(&c.FieldType) {
-			truncateTrailingSpaces(&rec[c.Offset])
-		}
 	}
 	return nil
 }
@@ -158,9 +130,6 @@ func CastValue(ctx context.Context, val types.Datum, col *model.ColumnInfo) (cas
 	str := casted.GetString()
 	for i, r := range str {
 		if r == utf8.RuneError {
-			if strings.HasPrefix(str[i:], string(utf8.RuneError)) {
-				continue
-			}
 			log.Errorf("[%d] incorrect utf8 value: %x for column %s",
 				ctx.GetSessionVars().ConnectionID, []byte(str), col.Name)
 			// Truncate to valid utf8 string.
@@ -190,7 +159,7 @@ const defaultPrivileges string = "select,insert,update,references"
 // GetTypeDesc gets the description for column type.
 func (c *Column) GetTypeDesc() string {
 	desc := c.FieldType.CompactStr()
-	if mysql.HasUnsignedFlag(c.Flag) && c.Tp != mysql.TypeBit {
+	if mysql.HasUnsignedFlag(c.Flag) {
 		desc += " UNSIGNED"
 	}
 	return desc
@@ -225,12 +194,6 @@ func NewColDesc(col *Column) *ColDesc {
 		extra = "auto_increment"
 	} else if mysql.HasOnUpdateNowFlag(col.Flag) {
 		extra = "on update CURRENT_TIMESTAMP"
-	} else if col.IsGenerated() {
-		if col.GeneratedStored {
-			extra = "STORED GENERATED"
-		} else {
-			extra = "VIRTUAL GENERATED"
-		}
 	}
 
 	return &ColDesc{
@@ -242,7 +205,7 @@ func NewColDesc(col *Column) *ColDesc {
 		DefaultValue: defaultValue,
 		Extra:        extra,
 		Privileges:   defaultPrivileges,
-		Comment:      col.Comment,
+		Comment:      "",
 	}
 }
 
@@ -342,7 +305,7 @@ func getColDefaultValueFromNil(ctx context.Context, col *model.ColumnInfo) (type
 		// TODO: add warning.
 		return GetZeroValue(col), nil
 	}
-	return types.Datum{}, ErrNoDefaultValue.Gen("Field '%s' doesn't have a default value", col.Name)
+	return types.Datum{}, errNoDefaultValue.Gen("Field '%s' doesn't have a default value", col.Name)
 }
 
 // GetZeroValue gets zero value for given column type.
@@ -374,13 +337,9 @@ func GetZeroValue(col *model.ColumnInfo) types.Datum {
 	case mysql.TypeDatetime:
 		d.SetMysqlTime(types.ZeroDatetime)
 	case mysql.TypeBit:
-		d.SetMysqlBit(types.ZeroBinaryLiteral)
+		d.SetMysqlBit(types.Bit{Value: 0, Width: types.MinBitWidth})
 	case mysql.TypeSet:
 		d.SetMysqlSet(types.Set{})
-	case mysql.TypeEnum:
-		d.SetMysqlEnum(types.Enum{})
-	case mysql.TypeJSON:
-		d.SetMysqlJSON(json.CreateJSON(nil))
 	}
 	return d
 }

@@ -19,38 +19,29 @@ import (
 	"runtime"
 	"strconv"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/mysql"
 )
 
 // Global error instances.
 var (
-	ErrCritical           = ClassGlobal.New(CodeExecResultIsEmpty, "critical error %v")
-	ErrResultUndetermined = ClassGlobal.New(CodeResultUndetermined, "execution result undetermined")
+	ErrCritical = ClassGlobal.New(CodeExecResultIsEmpty, "critical error %v")
 )
 
 // ErrCode represents a specific error type in a error class.
 // Same error code can be used in different error classes.
 type ErrCode int
 
+// Executor error codes.
 const (
-	// Executor error codes.
+	CodeUnknown           ErrCode = -1
+	CodeExecResultIsEmpty         = 3
+)
 
-	// CodeUnknown is for errors of unknown reason.
-	CodeUnknown ErrCode = -1
-	// CodeExecResultIsEmpty indicates execution result is empty.
-	CodeExecResultIsEmpty = 3
-
-	// Expression error codes.
-
-	// CodeMissConnectionID indicates connection id is missing.
-	CodeMissConnectionID ErrCode = 1
-
-	// Special error codes.
-
-	// CodeResultUndetermined indicates the sql execution result is undetermined.
-	CodeResultUndetermined ErrCode = 2
+// Expression error codes.
+const (
+	CodeMissConnectionID ErrCode = iota + 1
 )
 
 // ErrClass represents a class of errors.
@@ -80,42 +71,50 @@ const (
 	ClassTable
 	ClassTypes
 	ClassGlobal
-	ClassMockTikv
-	ClassJSON
-	ClassTiKV
 	// Add more as needed.
 )
 
-var errClz2Str = map[ErrClass]string{
-	ClassAutoid:        "autoid",
-	ClassDDL:           "ddl",
-	ClassDomain:        "domain",
-	ClassExecutor:      "executor",
-	ClassExpression:    "expression",
-	ClassInspectkv:     "inspectkv",
-	ClassMeta:          "meta",
-	ClassKV:            "kv",
-	ClassOptimizer:     "optimizer",
-	ClassOptimizerPlan: "plan",
-	ClassParser:        "parser",
-	ClassPerfSchema:    "perfschema",
-	ClassPrivilege:     "privilege",
-	ClassSchema:        "schema",
-	ClassServer:        "server",
-	ClassStructure:     "structure",
-	ClassVariable:      "variable",
-	ClassTable:         "table",
-	ClassTypes:         "types",
-	ClassGlobal:        "global",
-	ClassMockTikv:      "mocktikv",
-	ClassJSON:          "json",
-	ClassTiKV:          "tikv",
-}
-
 // String implements fmt.Stringer interface.
 func (ec ErrClass) String() string {
-	if s, exists := errClz2Str[ec]; exists {
-		return s
+	switch ec {
+	case ClassAutoid:
+		return "autoid"
+	case ClassDDL:
+		return "ddl"
+	case ClassDomain:
+		return "domain"
+	case ClassExecutor:
+		return "executor"
+	case ClassExpression:
+		return "expression"
+	case ClassInspectkv:
+		return "inspectkv"
+	case ClassMeta:
+		return "meta"
+	case ClassKV:
+		return "kv"
+	case ClassOptimizer:
+		return "optimizer"
+	case ClassParser:
+		return "parser"
+	case ClassPerfSchema:
+		return "perfschema"
+	case ClassPrivilege:
+		return "privilege"
+	case ClassSchema:
+		return "schema"
+	case ClassServer:
+		return "server"
+	case ClassStructure:
+		return "structure"
+	case ClassVariable:
+		return "variable"
+	case ClassTable:
+		return "table"
+	case ClassTypes:
+		return "types"
+	case ClassGlobal:
+		return "global"
 	}
 	return strconv.Itoa(int(ec))
 }
@@ -249,10 +248,6 @@ func (e *Error) Equal(err error) bool {
 	if originErr == nil {
 		return false
 	}
-
-	if error(e) == originErr {
-		return true
-	}
 	inErr, ok := originErr.(*Error)
 	return ok && e.class == inErr.class && e.code == inErr.code
 }
@@ -265,7 +260,7 @@ func (e *Error) NotEqual(err error) bool {
 // ToSQLError convert Error to mysql.SQLError.
 func (e *Error) ToSQLError() *mysql.SQLError {
 	code := e.getMySQLErrorCode()
-	return mysql.NewErrf(code, "%s", e.getMsg())
+	return mysql.NewErrf(code, e.getMsg())
 }
 
 var defaultMySQLErrorCode uint16
@@ -319,26 +314,4 @@ func ErrorEqual(err1, err2 error) bool {
 // ErrorNotEqual returns a boolean indicating whether err1 isn't equal to err2.
 func ErrorNotEqual(err1, err2 error) bool {
 	return !ErrorEqual(err1, err2)
-}
-
-// MustNil fatals if err is not nil.
-func MustNil(err error) {
-	if err != nil {
-		log.Fatalf(errors.ErrorStack(err))
-	}
-}
-
-// Call executes a function and checks the returned err.
-func Call(fn func() error) {
-	err := fn()
-	if err != nil {
-		log.Error(errors.ErrorStack(err))
-	}
-}
-
-// Log logs the error if it is not nil.
-func Log(err error) {
-	if err != nil {
-		log.Error(errors.ErrorStack(err))
-	}
 }

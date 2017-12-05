@@ -45,13 +45,13 @@ var specificStatusScopes = map[string]ScopeFlag{
 func (ms *mockStatistics) GetScope(status string) ScopeFlag {
 	scope, ok := specificStatusScopes[status]
 	if !ok {
-		return DefaultStatusVarScopeFlag
+		return DefaultScopeFlag
 	}
 
 	return scope
 }
 
-func (ms *mockStatistics) Stats(vars *SessionVars) (map[string]interface{}, error) {
+func (ms *mockStatistics) Stats() (map[string]interface{}, error) {
 	m := make(map[string]interface{}, len(specificStatusScopes))
 	m[testStatus] = testStatusVal
 
@@ -61,12 +61,12 @@ func (ms *mockStatistics) Stats(vars *SessionVars) (map[string]interface{}, erro
 func (s *testStatusVarSuite) TestStatusVar(c *C) {
 	defer testleak.AfterTest(c)()
 	scope := s.ms.GetScope(testStatus)
-	c.Assert(scope, Equals, DefaultStatusVarScopeFlag)
+	c.Assert(scope, Equals, DefaultScopeFlag)
 	scope = s.ms.GetScope(testSessionStatus)
 	c.Assert(scope, Equals, ScopeSession)
 
-	vars, err := GetStatusVars(nil)
+	vars, err := GetStatusVars()
 	c.Assert(err, IsNil)
-	v := &StatusVal{Scope: DefaultStatusVarScopeFlag, Value: testStatusVal}
+	v := &StatusVal{Scope: DefaultScopeFlag, Value: testStatusVal}
 	c.Assert(v, DeepEquals, vars[testStatus])
 }

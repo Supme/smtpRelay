@@ -5,7 +5,6 @@ import (
 	"container/heap"
 	"encoding/binary"
 	"sort"
-	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
@@ -15,6 +14,7 @@ import (
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/tablecodec"
+	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tipb/go-tipb"
@@ -74,7 +74,7 @@ func (t *topnSorter) Less(i, j int) bool {
 		v1 := t.rows[i].key[index]
 		v2 := t.rows[j].key[index]
 
-		ret, err := v1.CompareDatum(t.ctx.sc, &v2)
+		ret, err := v1.CompareDatum(t.ctx.sc, v2)
 		if err != nil {
 			t.err = errors.Trace(err)
 			return true
@@ -123,7 +123,7 @@ func (t *topnHeap) Less(i, j int) bool {
 		v1 := t.rows[i].key[index]
 		v2 := t.rows[j].key[index]
 
-		ret, err := v1.CompareDatum(t.ctx.sc, &v2)
+		ret, err := v1.CompareDatum(t.ctx.sc, v2)
 		if err != nil {
 			t.err = errors.Trace(err)
 			return true
@@ -180,7 +180,7 @@ type selectContext struct {
 	// TODO: Only one of these three flags can be true at the same time. We should set this as an enum var.
 	aggregate bool
 	descScan  bool
-	topN      bool
+	topn      bool
 
 	// Use for DecodeRow.
 	colTps map[int64]*types.FieldType
@@ -200,21 +200,17 @@ func (rs *localRegion) Handle(req *regionRequest) (*regionResponse, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		txn := newTxn(rs.store, kv.Version{Ver: sel.StartTs})
+		txn := newTxn(rs.store, kv.Version{Ver: uint64(sel.StartTs)})
 		ctx := &selectContext{
 			sel:       sel,
 			txn:       txn,
 			keyRanges: req.ranges,
 			sc:        xeval.FlagsToStatementContext(sel.Flags),
 		}
-		loc := time.FixedZone("UTC", int(sel.TimeZoneOffset))
-		ctx.eval = xeval.NewEvaluator(ctx.sc, loc)
+		ctx.eval = xeval.NewEvaluator(ctx.sc)
 		if sel.Where != nil {
 			ctx.whereColumns = make(map[int64]*tipb.ColumnInfo)
-			err = collectColumnsInExpr(sel.Where, ctx, ctx.whereColumns)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
+			collectColumnsInExpr(sel.Where, ctx, ctx.whereColumns)
 		}
 		if len(sel.OrderBy) > 0 {
 			if sel.OrderBy[0].Expr == nil {
@@ -223,7 +219,7 @@ func (rs *localRegion) Handle(req *regionRequest) (*regionResponse, error) {
 				if sel.Limit == nil {
 					return nil, errors.New("we don't support pushing down Sort without Limit")
 				}
-				ctx.topN = true
+				ctx.topn = true
 				ctx.topnHeap = &topnHeap{
 					totalCount: int(*sel.Limit),
 					topnSorter: topnSorter{
@@ -233,10 +229,7 @@ func (rs *localRegion) Handle(req *regionRequest) (*regionResponse, error) {
 				}
 				ctx.topnColumns = make(map[int64]*tipb.ColumnInfo)
 				for _, item := range sel.OrderBy {
-					err = collectColumnsInExpr(item.Expr, ctx, ctx.topnColumns)
-					if err != nil {
-						return nil, errors.Trace(err)
-					}
+					collectColumnsInExpr(item.Expr, ctx, ctx.topnColumns)
 				}
 				for k := range ctx.whereColumns {
 					// It will be handled in where.
@@ -252,18 +245,12 @@ func (rs *localRegion) Handle(req *regionRequest) (*regionResponse, error) {
 			for _, agg := range sel.Aggregates {
 				aggExpr := &aggregateFuncExpr{expr: agg}
 				ctx.aggregates = append(ctx.aggregates, aggExpr)
-				err = collectColumnsInExpr(agg, ctx, ctx.aggColumns)
-				if err != nil {
-					return nil, errors.Trace(err)
-				}
+				collectColumnsInExpr(agg, ctx, ctx.aggColumns)
 			}
 			ctx.groups = make(map[string]bool)
 			ctx.groupKeys = make([][]byte, 0)
 			for _, item := range ctx.sel.GetGroupBy() {
-				err = collectColumnsInExpr(item.Expr, ctx, ctx.aggColumns)
-				if err != nil {
-					return nil, errors.Trace(err)
-				}
+				collectColumnsInExpr(item.Expr, ctx, ctx.aggColumns)
 			}
 			for k := range ctx.whereColumns {
 				// It will be handled in where.
@@ -280,7 +267,7 @@ func (rs *localRegion) Handle(req *regionRequest) (*regionResponse, error) {
 			}
 			err = rs.getRowsFromIndexReq(ctx)
 		}
-		if ctx.topN {
+		if ctx.topn {
 			rs.setTopNDataForCtx(ctx)
 		}
 		selResp := new(tipb.SelectResponse)
@@ -446,7 +433,7 @@ func (rs *localRegion) getRowsFromRange(ctx *selectContext, ran kv.KeyRange, lim
 	if ran.IsPoint() {
 		var value []byte
 		value, err = ctx.txn.Get(ran.StartKey)
-		if kv.ErrNotExist.Equal(err) {
+		if terror.ErrorEqual(err, kv.ErrNotExist) {
 			return 0, nil
 		} else if err != nil {
 			return 0, errors.Trace(err)
@@ -604,7 +591,7 @@ func (rs *localRegion) valuesToRow(ctx *selectContext, handle int64, values map[
 	if !match {
 		return false, nil
 	}
-	if ctx.topN {
+	if ctx.topn {
 		return false, errors.Trace(rs.evalTopN(ctx, handle, values, columns))
 	}
 	if ctx.aggregate {
@@ -661,7 +648,7 @@ func (rs *localRegion) setColumnValueToCtx(ctx *selectContext, h int64, row map[
 		} else {
 			data := row[colID]
 			ft := distsql.FieldTypeFromPBColumn(col)
-			datum, err := tablecodec.DecodeColumnValue(data, ft, ctx.eval.TimeZone)
+			datum, err := tablecodec.DecodeColumnValue(data, ft)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -719,7 +706,7 @@ func (rs *localRegion) getRowsFromIndexReq(ctx *selectContext) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		limit -= count
+		limit -= int64(count)
 	}
 	if ctx.aggregate {
 		return rs.getRowsFromAgg(ctx)
@@ -838,5 +825,5 @@ func buildLocalRegionServers(store *dbStore) []*localRegion {
 }
 
 func isDefaultNull(err error, col *tipb.ColumnInfo) bool {
-	return kv.ErrNotExist.Equal(err) && !mysql.HasNotNullFlag(uint(col.GetFlag()))
+	return terror.ErrorEqual(err, kv.ErrNotExist) && !mysql.HasNotNullFlag(uint(col.GetFlag()))
 }

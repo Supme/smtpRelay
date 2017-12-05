@@ -17,8 +17,9 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/coreos/etcd/pkg/monotime"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tipb/go-binlog"
 	goctx "golang.org/x/net/context"
@@ -30,16 +31,14 @@ var (
 
 // tikvTxn implements kv.Transaction.
 type tikvTxn struct {
-	snapshot  *tikvSnapshot
 	us        kv.UnionStore
 	store     *tikvStore // for connection to region.
 	startTS   uint64
-	startTime time.Time // Monotonic timestamp for recording txn time consuming.
+	startTime monotime.Time // Monotonic timestamp for recording txn time consuming.
 	commitTS  uint64
 	valid     bool
 	lockKeys  [][]byte
 	dirty     bool
-	setCnt    int64
 }
 
 func newTiKVTxn(store *tikvStore) (*tikvTxn, error) {
@@ -48,19 +47,24 @@ func newTiKVTxn(store *tikvStore) (*tikvTxn, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return newTikvTxnWithStartTS(store, startTS)
+	ver := kv.NewVersion(startTS)
+	return &tikvTxn{
+		us:        kv.NewUnionStore(newTiKVSnapshot(store, ver)),
+		store:     store,
+		startTS:   startTS,
+		startTime: monotime.Now(),
+		valid:     true,
+	}, nil
 }
 
 // newTikvTxnWithStartTS creates a txn with startTS.
 func newTikvTxnWithStartTS(store *tikvStore, startTS uint64) (*tikvTxn, error) {
 	ver := kv.NewVersion(startTS)
-	snapshot := newTiKVSnapshot(store, ver)
 	return &tikvTxn{
-		snapshot:  snapshot,
-		us:        kv.NewUnionStore(snapshot),
+		us:        kv.NewUnionStore(newTiKVSnapshot(store, ver)),
 		store:     store,
 		startTS:   startTS,
-		startTime: time.Now(),
+		startTime: monotime.Now(),
 		valid:     true,
 	}, nil
 }
@@ -75,17 +79,11 @@ func (txn *tikvTxn) Get(k kv.Key) ([]byte, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
-	err = txn.store.CheckVisibility(txn.startTS)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
 	return ret, nil
 }
 
 func (txn *tikvTxn) Set(k kv.Key, v []byte) error {
-	txn.setCnt++
+	txnCmdCounter.WithLabelValues("set").Inc()
 
 	txn.dirty = true
 	return txn.us.Set(k, v)
@@ -121,23 +119,10 @@ func (txn *tikvTxn) Delete(k kv.Key) error {
 
 func (txn *tikvTxn) SetOption(opt kv.Option, val interface{}) {
 	txn.us.SetOption(opt, val)
-	switch opt {
-	case kv.IsolationLevel:
-		txn.snapshot.isolationLevel = val.(kv.IsoLevel)
-	case kv.Priority:
-		txn.snapshot.priority = kvPriorityToCommandPri(val.(int))
-	case kv.NotFillCache:
-		txn.snapshot.notFillCache = val.(bool)
-	case kv.SyncLog:
-		txn.snapshot.syncLog = val.(bool)
-	}
 }
 
 func (txn *tikvTxn) DelOption(opt kv.Option) {
 	txn.us.DelOption(opt)
-	if opt == kv.IsolationLevel {
-		txn.snapshot.isolationLevel = kv.SI
-	}
 }
 
 func (txn *tikvTxn) Commit() error {
@@ -146,7 +131,6 @@ func (txn *tikvTxn) Commit() error {
 	}
 	defer txn.close()
 
-	txnCmdCounter.WithLabelValues("set").Add(float64(txn.setCnt))
 	txnCmdCounter.WithLabelValues("commit").Inc()
 	start := time.Now()
 	defer func() { txnCmdHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds()) }()
@@ -172,8 +156,9 @@ func (txn *tikvTxn) Commit() error {
 	return nil
 }
 
-func (txn *tikvTxn) close() {
+func (txn *tikvTxn) close() error {
 	txn.valid = false
+	return nil
 }
 
 func (txn *tikvTxn) Rollback() error {

@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
-	goctx "golang.org/x/net/context"
 )
 
 var _ = Suite(&testColumnSuite{})
@@ -45,7 +44,7 @@ type testColumnSuite struct {
 
 func (s *testColumnSuite) SetUpSuite(c *C) {
 	s.store = testCreateStore(c, "test_column")
-	s.d = testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	s.d = newDDL(s.store, nil, nil, testLease)
 
 	s.dbInfo = testSchemaInfo(c, s.d, "test_column")
 	testCreateSchema(c, testNewContext(s.d), s.d, s.dbInfo)
@@ -110,11 +109,12 @@ func (s *testColumnSuite) TestColumn(c *C) {
 	ctx := testNewContext(s.d)
 
 	testCreateTable(c, ctx, s.d, s.dbInfo, tblInfo)
+
 	t := testGetTable(c, s.d, s.dbInfo.ID, tblInfo.ID)
 
 	num := 10
 	for i := 0; i < num; i++ {
-		_, err := t.AddRecord(ctx, types.MakeDatums(i, 10*i, 100*i), false)
+		_, err := t.AddRecord(ctx, types.MakeDatums(i, 10*i, 100*i))
 		c.Assert(err, IsNil)
 	}
 
@@ -154,7 +154,7 @@ func (s *testColumnSuite) TestColumn(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(i, Equals, int64(num))
 
-	h, err := t.AddRecord(ctx, types.MakeDatums(11, 12, 13, 14), false)
+	h, err := t.AddRecord(ctx, types.MakeDatums(11, 12, 13, 14))
 	c.Assert(err, IsNil)
 	err = ctx.NewTxn()
 	c.Assert(err, IsNil)
@@ -227,6 +227,7 @@ func (s *testColumnSuite) TestColumn(c *C) {
 
 	values, err = t.RowWithCols(ctx, h, t.Cols())
 	c.Assert(err, IsNil)
+
 	c.Assert(values, HasLen, 5)
 	c.Assert(values[0].GetInt64(), Equals, int64(202))
 	c.Assert(values[4].GetInt64(), Equals, int64(101))
@@ -274,7 +275,7 @@ func (s *testColumnSuite) checkColumnKVExist(ctx context.Context, t table.Table,
 	}
 	colMap := make(map[int64]*types.FieldType)
 	colMap[col.ID] = &col.FieldType
-	rowMap, err := tablecodec.DecodeRow(data, colMap, ctx.GetSessionVars().GetTimeZone())
+	rowMap, err := tablecodec.DecodeRow(data, colMap)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -341,7 +342,7 @@ func (s *testColumnSuite) checkDeleteOnlyColumn(ctx context.Context, d *ddl, tbl
 	}
 
 	newRow := types.MakeDatums(int64(11), int64(22), int64(33))
-	newHandle, err := t.AddRecord(ctx, newRow, false)
+	newHandle, err := t.AddRecord(ctx, newRow)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -445,7 +446,7 @@ func (s *testColumnSuite) checkWriteOnlyColumn(ctx context.Context, d *ddl, tblI
 	}
 
 	newRow := types.MakeDatums(int64(11), int64(22), int64(33))
-	newHandle, err := t.AddRecord(ctx, newRow, false)
+	newHandle, err := t.AddRecord(ctx, newRow)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -545,7 +546,7 @@ func (s *testColumnSuite) checkReorganizationColumn(ctx context.Context, d *ddl,
 	}
 
 	newRow := types.MakeDatums(int64(11), int64(22), int64(33))
-	newHandle, err := t.AddRecord(ctx, newRow, false)
+	newHandle, err := t.AddRecord(ctx, newRow)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -642,7 +643,7 @@ func (s *testColumnSuite) checkPublicColumn(ctx context.Context, d *ddl, tblInfo
 	}
 
 	newRow := types.MakeDatums(int64(11), int64(22), int64(33), int64(44))
-	handle, err = t.AddRecord(ctx, newRow, false)
+	handle, err = t.AddRecord(ctx, newRow)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -737,7 +738,7 @@ func (s *testColumnSuite) testGetColumn(t table.Table, name string, isExist bool
 
 func (s *testColumnSuite) TestAddColumn(c *C) {
 	defer testleak.AfterTest(c)()
-	d := testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	d := newDDL(s.store, nil, nil, testLease)
 	tblInfo := testTableInfo(c, d, "t", 3)
 	ctx := testNewContext(d)
 
@@ -748,7 +749,7 @@ func (s *testColumnSuite) TestAddColumn(c *C) {
 	t := testGetTable(c, d, s.dbInfo.ID, tblInfo.ID)
 
 	oldRow := types.MakeDatums(int64(1), int64(2), int64(3))
-	handle, err := t.AddRecord(ctx, oldRow, false)
+	handle, err := t.AddRecord(ctx, oldRow)
 	c.Assert(err, IsNil)
 
 	err = ctx.Txn().Commit()
@@ -761,7 +762,7 @@ func (s *testColumnSuite) TestAddColumn(c *C) {
 	var hookErr error
 	checkOK := false
 
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	tc.onJobUpdated = func(job *model.Job) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -790,13 +791,13 @@ func (s *testColumnSuite) TestAddColumn(c *C) {
 		}
 	}
 
-	d.SetHook(tc)
+	d.setHook(tc)
 
 	// Use local ddl for callback test.
 	s.d.Stop()
 
 	d.Stop()
-	d.start(goctx.Background())
+	d.start()
 
 	job := testCreateColumn(c, ctx, d, s.dbInfo, tblInfo, newColName, &ast.ColumnPosition{Tp: ast.ColumnPositionNone}, defaultColValue)
 
@@ -818,12 +819,12 @@ func (s *testColumnSuite) TestAddColumn(c *C) {
 	c.Assert(err, IsNil)
 
 	d.Stop()
-	s.d.start(goctx.Background())
+	s.d.start()
 }
 
 func (s *testColumnSuite) TestDropColumn(c *C) {
 	defer testleak.AfterTest(c)()
-	d := testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	d := newDDL(s.store, nil, nil, testLease)
 	tblInfo := testTableInfo(c, d, "t", 4)
 	ctx := testNewContext(d)
 
@@ -831,12 +832,13 @@ func (s *testColumnSuite) TestDropColumn(c *C) {
 	c.Assert(err, IsNil)
 
 	testCreateTable(c, ctx, d, s.dbInfo, tblInfo)
+
 	t := testGetTable(c, d, s.dbInfo.ID, tblInfo.ID)
 
 	colName := "c4"
 	defaultColValue := int64(4)
 	row := types.MakeDatums(int64(1), int64(2), int64(3))
-	_, err = t.AddRecord(ctx, append(row, types.NewDatum(defaultColValue)), false)
+	_, err = t.AddRecord(ctx, append(row, types.NewDatum(defaultColValue)))
 	c.Assert(err, IsNil)
 
 	err = ctx.Txn().Commit()
@@ -846,7 +848,7 @@ func (s *testColumnSuite) TestDropColumn(c *C) {
 	var hookErr error
 	var mu sync.Mutex
 
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	tc.onJobUpdated = func(job *model.Job) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -865,13 +867,13 @@ func (s *testColumnSuite) TestDropColumn(c *C) {
 		}
 	}
 
-	d.SetHook(tc)
+	d.setHook(tc)
 
 	// Use local ddl for callback test.
 	s.d.Stop()
 
 	d.Stop()
-	d.start(goctx.Background())
+	d.start()
 
 	job := testDropColumn(c, ctx, s.d, s.dbInfo, tblInfo, colName, false)
 	testCheckJobDone(c, d, job, false)
@@ -892,35 +894,30 @@ func (s *testColumnSuite) TestDropColumn(c *C) {
 	c.Assert(err, IsNil)
 
 	d.Stop()
-	s.d.start(goctx.Background())
+	s.d.start()
 }
 
 func (s *testColumnSuite) TestModifyColumn(c *C) {
-	d := testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	d := newDDL(s.store, nil, nil, testLease)
 	defer d.Stop()
-	tests := []struct {
+	cases := []struct {
 		origin string
 		to     string
-		err    error
+		ok     bool
 	}{
-		{"int", "bigint", nil},
-		{"int", "int unsigned", errUnsupportedModifyColumn.GenByArgs("length 10 is less than origin 11")},
-		{"varchar(10)", "text", nil},
-		{"varbinary(10)", "blob", nil},
-		{"text", "blob", errUnsupportedModifyColumn.GenByArgs("charset binary not match origin utf8")},
-		{"varchar(10)", "varchar(8)", errUnsupportedModifyColumn.GenByArgs("length 8 is less than origin 10")},
-		{"varchar(10)", "varchar(11)", nil},
-		{"varchar(10) character set utf8 collate utf8_bin", "varchar(10) character set utf8", nil},
+		{"int", "bigint", true},
+		{"int", "int unsigned", false},
+		{"varchar(10)", "text", true},
+		{"varbinary(10)", "blob", true},
+		{"text", "blob", false},
+		{"varchar(10)", "varchar(8)", false},
+		{"varchar(10)", "varchar(11)", true},
+		{"varchar(10) character set utf8 collate utf8_bin", "varchar(10) character set utf8", true},
 	}
-	for _, tt := range tests {
-		ftA := s.colDefStrToFieldType(c, tt.origin)
-		ftB := s.colDefStrToFieldType(c, tt.to)
-		err := modifiable(ftA, ftB)
-		if err == nil {
-			c.Assert(tt.err, IsNil)
-		} else {
-			c.Assert(err.Error(), Equals, tt.err.Error())
-		}
+	for _, ca := range cases {
+		ftA := s.colDefStrToFieldType(c, ca.origin)
+		ftB := s.colDefStrToFieldType(c, ca.to)
+		c.Assert(modifiable(ftA, ftB), Equals, ca.ok)
 	}
 }
 
@@ -932,19 +929,4 @@ func (s *testColumnSuite) colDefStrToFieldType(c *C, str string) *types.FieldTyp
 	col, _, err := buildColumnAndConstraint(nil, 0, colDef)
 	c.Assert(err, IsNil)
 	return &col.FieldType
-}
-
-func (s *testColumnSuite) TestFieldCase(c *C) {
-	var fields = []string{"field", "Field"}
-	var colDefs = make([]*ast.ColumnDef, len(fields))
-	for i, name := range fields {
-		colDefs[i] = &ast.ColumnDef{
-			Name: &ast.ColumnName{
-				Schema: model.NewCIStr("TestSchema"),
-				Table:  model.NewCIStr("TestTable"),
-				Name:   model.NewCIStr(name),
-			},
-		}
-	}
-	c.Assert(checkDuplicateColumn(colDefs), NotNil)
 }

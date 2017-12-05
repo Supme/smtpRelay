@@ -18,7 +18,7 @@ import (
 	"github.com/pingcap/tidb/domain"
 )
 
-// domainKeyType is a dummy type to avoid naming collision in context.
+// A dummy type to avoid naming collision in context.
 type domainKeyType int
 
 // String defines a Stringer function for debugging and pretty printing.

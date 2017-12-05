@@ -90,7 +90,7 @@ func (s *Scanner) Errors() []error {
 
 // reset resets the sql string to be scanned.
 func (s *Scanner) reset(sql string) {
-	s.r = reader{s: sql, p: Pos{Line: 1}}
+	s.r = reader{s: sql}
 	s.buf.Reset()
 	s.errs = s.errs[:0]
 	s.stmtStartPos = 0
@@ -136,7 +136,7 @@ func (s *Scanner) Lex(v *yySymType) int {
 		tok = handleIdent(v)
 	}
 	if tok == identifier {
-		if tok1 := s.isTokenIdentifier(lit, pos.Offset); tok1 != 0 {
+		if tok1 := isTokenIdentifier(lit, &s.buf); tok1 != 0 {
 			tok = tok1
 		}
 	}
@@ -157,7 +157,7 @@ func (s *Scanner) Lex(v *yySymType) int {
 		return toHex(s, v, lit)
 	case bitLit:
 		return toBit(s, v, lit)
-	case singleAtIdentifier, doubleAtIdentifier, cast, extract:
+	case userVar, sysVar, cast, curDate, extract:
 		v.item = lit
 		return tok
 	case null:
@@ -293,26 +293,17 @@ func startWithSharp(s *Scanner) (tok int, pos Pos, lit string) {
 
 func startWithDash(s *Scanner) (tok int, pos Pos, lit string) {
 	pos = s.r.pos()
-	if strings.HasPrefix(s.r.s[pos.Offset:], "-- ") {
-		s.r.incN(3)
-		s.r.incAsLongAs(func(ch rune) bool {
-			return ch != '\n'
-		})
-		return s.scan()
-	}
-	if strings.HasPrefix(s.r.s[pos.Offset:], "->>") {
-		tok = juss
-		s.r.incN(3)
+	if !strings.HasPrefix(s.r.s[pos.Offset:], "-- ") {
+		tok = int('-')
+		s.r.inc()
 		return
 	}
-	if strings.HasPrefix(s.r.s[pos.Offset:], "->") {
-		tok = jss
-		s.r.incN(2)
-		return
-	}
-	tok = int('-')
-	s.r.inc()
-	return
+
+	s.r.incN(3)
+	s.r.incAsLongAs(func(ch rune) bool {
+		return ch != '\n'
+	})
+	return s.scan()
 }
 
 func startWithSlash(s *Scanner) (tok int, pos Pos, lit string) {
@@ -324,8 +315,7 @@ func startWithSlash(s *Scanner) (tok int, pos Pos, lit string) {
 		for {
 			ch0 = s.r.readByte()
 			if ch0 == unicode.ReplacementChar && s.r.eof() {
-				// unclosed comment
-				s.errs = append(s.errs, ParseErrorWith(s.r.data(&pos), s.r.p.Line))
+				tok = unicode.ReplacementChar
 				return
 			}
 			if ch0 == '*' && s.r.readByte() == '/' {
@@ -356,7 +346,7 @@ func startWithSlash(s *Scanner) (tok int, pos Pos, lit string) {
 		// See http://dev.mysql.com/doc/refman/5.7/en/comments.html
 		// Convert "/*!VersionNumber MySQL-specific-code */" to "MySQL-specific-code".
 		if strings.HasPrefix(comment, "/*!") {
-			sql := specCodePattern.ReplaceAllStringFunc(comment, TrimComment)
+			sql := specCodePattern.ReplaceAllStringFunc(comment, trimComment)
 			s.specialComment = &mysqlSpecificCodeScanner{
 				Scanner: NewScanner(sql),
 				Pos: Pos{
@@ -397,7 +387,7 @@ func startWithAt(s *Scanner) (tok int, pos Pos, lit string) {
 	ch1 := s.r.peek()
 	if isIdentFirstChar(ch1) {
 		s.r.incAsLongAs(isIdentChar)
-		tok, lit = singleAtIdentifier, s.r.data(&pos)
+		tok, lit = userVar, s.r.data(&pos)
 	} else if ch1 == '@' {
 		s.r.inc()
 		stream := s.r.s[pos.Offset+2:]
@@ -411,9 +401,9 @@ func startWithAt(s *Scanner) (tok int, pos Pos, lit string) {
 			}
 		}
 		s.r.incAsLongAs(isIdentChar)
-		tok, lit = doubleAtIdentifier, s.r.data(&pos)
+		tok, lit = sysVar, s.r.data(&pos)
 	} else {
-		tok = int('@')
+		tok = at
 	}
 	return
 }
@@ -452,7 +442,21 @@ func scanQuotedIdent(s *Scanner) (tok int, pos Pos, lit string) {
 }
 
 func startString(s *Scanner) (tok int, pos Pos, lit string) {
-	return s.scanString()
+	tok, pos, lit = s.scanString()
+
+	// Quoted strings placed next to each other are concatenated to a single string.
+	// See http://dev.mysql.com/doc/refman/5.7/en/string-literals.html
+	ch := s.skipWhitespace()
+	if s.sqlMode&mysql.ModeANSIQuotes > 0 &&
+		ch == '"' || s.r.s[pos.Offset] == '"' {
+		return
+	}
+	for ch == '\'' || ch == '"' {
+		_, _, lit1 := s.scanString()
+		lit = lit + lit1
+		ch = s.skipWhitespace()
+	}
+	return
 }
 
 // lazyBuf is used to avoid allocation if possible.
@@ -514,10 +518,8 @@ func (s *Scanner) scanString() (tok int, pos Pos, lit string) {
 			ch0 = handleEscape(s)
 		}
 		mb.writeRune(ch0, s.r.w)
-		if !s.r.eof() {
-			s.r.inc()
-			ch0 = s.r.peek()
-		}
+		s.r.inc()
+		ch0 = s.r.peek()
 	}
 
 	tok = unicode.ReplacementChar
@@ -600,7 +602,7 @@ func startWithDot(s *Scanner) (tok int, pos Pos, lit string) {
 	save := s.r.pos()
 	if isDigit(s.r.peek()) {
 		tok, _, lit = s.scanFloat(&pos)
-		if s.r.eof() || !isIdentChar(s.r.peek()) {
+		if s.r.eof() || unicode.IsSpace(s.r.peek()) {
 			return
 		}
 		// Fail to parse a float, reset to dot.

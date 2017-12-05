@@ -14,7 +14,6 @@
 package varsutil
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -33,11 +32,6 @@ func GetSessionSystemVar(s *variable.SessionVars, key string) (string, error) {
 	sysVar := variable.SysVars[key]
 	if sysVar == nil {
 		return "", variable.UnknownSystemVar.GenByArgs(key)
-	}
-	// For virtual system variables:
-	switch sysVar.Name {
-	case variable.TiDBCurrentTS:
-		return fmt.Sprintf("%d", s.TxnCtx.StartTS), nil
 	}
 	sVal, ok := s.Systems[key]
 	if ok {
@@ -67,11 +61,7 @@ func GetGlobalSystemVar(s *variable.SessionVars, key string) (string, error) {
 	} else if sysVar.Scope == variable.ScopeNone {
 		return sysVar.Value, nil
 	}
-	gVal, err := s.GlobalVarsAccessor.GetGlobalSysVar(key)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	return gVal, nil
+	return s.GlobalVarsAccessor.GetGlobalSysVar(key)
 }
 
 // epochShiftBits is used to reserve logical part of the timestamp.
@@ -97,18 +87,21 @@ func SetSessionSystemVar(vars *variable.SessionVars, name string, value types.Da
 	}
 	switch name {
 	case variable.TimeZone:
-		vars.TimeZone, err = parseTimeZone(sVal)
-		if err != nil {
-			return errors.Trace(err)
-		}
+		vars.TimeZone = parseTimeZone(sVal)
 	case variable.SQLModeVar:
-		sVal = mysql.FormatSQLModeStr(sVal)
-		// Modes is a list of different modes separated by commas.
-		sqlMode, err2 := mysql.GetSQLMode(sVal)
-		if err2 != nil {
-			return errors.Trace(err2)
+		sVal = strings.ToUpper(sVal)
+		// TODO: Remove this latter.
+		if strings.Contains(sVal, "STRICT_TRANS_TABLES") || strings.Contains(sVal, "STRICT_ALL_TABLES") {
+			vars.StrictSQLMode = true
+		} else {
+			vars.StrictSQLMode = false
 		}
-		vars.StrictSQLMode = sqlMode.HasStrictMode()
+		// Modes is a list of different modes separated by commas.
+		modes := strings.Split(sVal, ",")
+		var sqlMode mysql.SQLMode
+		for _, mode := range modes {
+			sqlMode = sqlMode | mysql.GetSQLMode(mode)
+		}
 		vars.SQLMode = sqlMode
 	case variable.TiDBSnapshot:
 		err = setSnapshotTS(vars, sVal)
@@ -125,34 +118,24 @@ func SetSessionSystemVar(vars *variable.SessionVars, name string, value types.Da
 		vars.SkipConstraintCheck = tidbOptOn(sVal)
 	case variable.TiDBSkipUTF8Check:
 		vars.SkipUTF8Check = tidbOptOn(sVal)
+	case variable.TiDBSkipDDLWait:
+		vars.SkipDDLWait = tidbOptOn(sVal)
 	case variable.TiDBOptAggPushDown:
 		vars.AllowAggPushDown = tidbOptOn(sVal)
 	case variable.TiDBOptInSubqUnFolding:
 		vars.AllowInSubqueryUnFolding = tidbOptOn(sVal)
 	case variable.TiDBIndexLookupConcurrency:
 		vars.IndexLookupConcurrency = tidbOptPositiveInt(sVal, variable.DefIndexLookupConcurrency)
-	case variable.TiDBIndexJoinBatchSize:
-		vars.IndexJoinBatchSize = tidbOptPositiveInt(sVal, variable.DefIndexJoinBatchSize)
 	case variable.TiDBIndexLookupSize:
 		vars.IndexLookupSize = tidbOptPositiveInt(sVal, variable.DefIndexLookupSize)
 	case variable.TiDBDistSQLScanConcurrency:
 		vars.DistSQLScanConcurrency = tidbOptPositiveInt(sVal, variable.DefDistSQLScanConcurrency)
-	case variable.TiDBIndexSerialScanConcurrency:
-		vars.IndexSerialScanConcurrency = tidbOptPositiveInt(sVal, variable.DefIndexSerialScanConcurrency)
-	case variable.TiDBBatchInsert:
-		vars.BatchInsert = tidbOptOn(sVal)
-	case variable.TiDBBatchDelete:
-		vars.BatchDelete = tidbOptOn(sVal)
-	case variable.TiDBMaxRowCountForINLJ:
-		vars.MaxRowCountForINLJ = tidbOptPositiveInt(sVal, variable.DefMaxRowCountForINLJ)
-	case variable.TiDBCurrentTS:
-		return variable.ErrReadOnly
 	}
 	vars.Systems[name] = sVal
 	return nil
 }
 
-// tidbOptOn could be used for all tidb session variable options, we use "ON"/1 to turn on those options.
+// For all tidb session variable options, we use "ON"/1 to turn on the options.
 func tidbOptOn(opt string) bool {
 	return strings.EqualFold(opt, "ON") || opt == "1"
 }
@@ -165,30 +148,26 @@ func tidbOptPositiveInt(opt string, defaultVal int) int {
 	return val
 }
 
-func parseTimeZone(s string) (*time.Location, error) {
+func parseTimeZone(s string) *time.Location {
 	if s == "SYSTEM" {
 		// TODO: Support global time_zone variable, it should be set to global time_zone value.
-		return time.Local, nil
+		return time.Local
 	}
 
 	loc, err := time.LoadLocation(s)
 	if err == nil {
-		return loc, nil
+		return loc
 	}
 
 	// The value can be given as a string indicating an offset from UTC, such as '+10:00' or '-6:00'.
 	if strings.HasPrefix(s, "+") || strings.HasPrefix(s, "-") {
 		d, err := types.ParseDuration(s[1:], 0)
 		if err == nil {
-			ofst := int(d.Duration / time.Second)
-			if s[0] == '-' {
-				ofst = -ofst
-			}
-			return time.FixedZone("UTC", ofst), nil
+			return time.FixedZone("UTC", int(d.Duration/time.Second))
 		}
 	}
 
-	return nil, variable.ErrUnknownTimeZone.GenByArgs(s)
+	return nil
 }
 
 func setSnapshotTS(s *variable.SessionVars, sVal string) error {
@@ -196,18 +175,13 @@ func setSnapshotTS(s *variable.SessionVars, sVal string) error {
 		s.SnapshotTS = 0
 		return nil
 	}
-	t, err := types.ParseTime(s.StmtCtx, sVal, mysql.TypeTimestamp, types.MaxFsp)
+	t, err := types.ParseTime(sVal, mysql.TypeTimestamp, types.MaxFsp)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	// TODO: Consider time_zone variable.
 	t1, err := t.Time.GoTime(time.Local)
-	s.SnapshotTS = GoTimeToTS(t1)
+	ts := (t1.UnixNano() / int64(time.Millisecond)) << epochShiftBits
+	s.SnapshotTS = uint64(ts)
 	return errors.Trace(err)
-}
-
-// GoTimeToTS converts a Go time to uint64 timestamp.
-func GoTimeToTS(t time.Time) uint64 {
-	ts := (t.UnixNano() / int64(time.Millisecond)) << epochShiftBits
-	return uint64(ts)
 }

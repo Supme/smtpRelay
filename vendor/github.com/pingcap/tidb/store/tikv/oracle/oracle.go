@@ -13,23 +13,13 @@
 
 package oracle
 
-import (
-	"time"
-
-	goctx "golang.org/x/net/context"
-)
+import "time"
 
 // Oracle is the interface that provides strictly ascending timestamps.
 type Oracle interface {
-	GetTimestamp(ctx goctx.Context) (uint64, error)
-	GetTimestampAsync(ctx goctx.Context) Future
+	GetTimestamp() (uint64, error)
 	IsExpired(lockTimestamp uint64, TTL uint64) bool
 	Close()
-}
-
-// Future is a future which promises to return a timestamp.
-type Future interface {
-	Wait() (uint64, error)
 }
 
 const physicalShiftBits = 18

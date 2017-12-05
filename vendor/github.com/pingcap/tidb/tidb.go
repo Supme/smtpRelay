@@ -23,18 +23,18 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/executor"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/parser"
+	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/store/localstore"
 	"github.com/pingcap/tidb/store/localstore/engine"
 	"github.com/pingcap/tidb/store/localstore/goleveldb"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tidb/util/types"
 )
@@ -60,17 +60,13 @@ func (dm *domainMap) Get(store kv.Storage) (d *domain.Domain, err error) {
 		return
 	}
 
-	ddlLease := time.Duration(0)
-	statisticLease := time.Duration(0)
+	lease := time.Duration(0)
 	if !localstore.IsLocalStore(store) {
-		ddlLease = schemaLease
-		statisticLease = statsLease
+		lease = schemaLease
 	}
 	err = util.RunWithRetry(defaultMaxRetries, retryInterval, func() (retry bool, err1 error) {
-		log.Infof("store %v new domain, ddl lease %v, stats lease %d", store.UUID(), ddlLease, statisticLease)
-		factory := createSessionFunc(store)
-		sysFactory := createSessionWithDomainFunc(store)
-		d, err1 = domain.NewDomain(store, ddlLease, statisticLease, factory, sysFactory)
+		log.Infof("store %v new domain, lease %v", store.UUID(), lease)
+		d, err1 = domain.NewDomain(store, lease)
 		return true, errors.Trace(err1)
 	})
 	if err != nil {
@@ -103,9 +99,6 @@ var (
 	// For production, you should set a big schema lease, like 300s+.
 	schemaLease = 1 * time.Second
 
-	// statsLease is the time for reload stats table.
-	statsLease = 3 * time.Second
-
 	// The maximum number of retries to recover from retryable errors.
 	commitRetryLimit = 10
 )
@@ -115,11 +108,6 @@ var (
 // SetSchemaLease only affects not local storage after bootstrapped.
 func SetSchemaLease(lease time.Duration) {
 	schemaLease = lease
-}
-
-// SetStatsLease changes the default stats lease time for loading stats info.
-func SetStatsLease(lease time.Duration) {
-	statsLease = lease
 }
 
 // SetCommitRetryLimit setups the maximum number of retries when trying to recover
@@ -145,11 +133,41 @@ func Parse(ctx context.Context, src string) ([]ast.StmtNode, error) {
 	return stmts, nil
 }
 
+// Before every execution, we must clear statement context.
+func resetStmtCtx(ctx context.Context, s ast.StmtNode) {
+	sessVars := ctx.GetSessionVars()
+	sc := new(variable.StatementContext)
+	switch s.(type) {
+	case *ast.UpdateStmt, *ast.InsertStmt, *ast.DeleteStmt:
+		sc.IgnoreTruncate = false
+		sc.TruncateAsWarning = !sessVars.StrictSQLMode
+		if _, ok := s.(*ast.InsertStmt); !ok {
+			sc.InUpdateOrDeleteStmt = true
+		}
+	case *ast.CreateTableStmt, *ast.AlterTableStmt:
+		// Make sure the sql_mode is strict when checking column default value.
+		sc.IgnoreTruncate = false
+		sc.TruncateAsWarning = false
+	default:
+		sc.IgnoreTruncate = true
+		if show, ok := s.(*ast.ShowStmt); ok {
+			if show.Tp == ast.ShowWarnings {
+				sc.InShowWarning = true
+				sc.SetWarnings(sessVars.StmtCtx.GetWarnings())
+			}
+		}
+	}
+	sessVars.StmtCtx = sc
+}
+
 // Compile is safe for concurrent use by multiple goroutines.
-func Compile(ctx context.Context, stmtNode ast.StmtNode) (ast.Statement, error) {
+func Compile(ctx context.Context, rawStmt ast.StmtNode) (ast.Statement, error) {
 	compiler := executor.Compiler{}
-	stmt, err := compiler.Compile(ctx, stmtNode)
-	return stmt, errors.Trace(err)
+	st, err := compiler.Compile(ctx, rawStmt)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return st, nil
 }
 
 // runStmt executes the ast.Statement and commit or rollback the current transaction.
@@ -159,12 +177,11 @@ func runStmt(ctx context.Context, s ast.Statement) (ast.RecordSet, error) {
 	se := ctx.(*session)
 	rs, err = s.Exec(ctx)
 	// All the history should be added here.
-	GetHistory(ctx).Add(0, s, se.sessionVars.StmtCtx)
+	getHistory(ctx).add(0, s, se.sessionVars.StmtCtx)
 	if !se.sessionVars.InTxn() {
 		if err != nil {
 			log.Info("RollbackTxn for ddl/autocommit error.")
-			err1 := se.RollbackTxn()
-			terror.Log(errors.Trace(err1))
+			se.RollbackTxn()
 		} else {
 			err = se.CommitTxn()
 		}
@@ -172,13 +189,12 @@ func runStmt(ctx context.Context, s ast.Statement) (ast.RecordSet, error) {
 	return rs, errors.Trace(err)
 }
 
-// GetHistory get all stmtHistory in current txn. Exported only for test.
-func GetHistory(ctx context.Context) *StmtHistory {
-	hist, ok := ctx.GetSessionVars().TxnCtx.Histroy.(*StmtHistory)
+func getHistory(ctx context.Context) *stmtHistory {
+	hist, ok := ctx.GetSessionVars().TxnCtx.Histroy.(*stmtHistory)
 	if ok {
 		return hist
 	}
-	hist = new(StmtHistory)
+	hist = new(stmtHistory)
 	ctx.GetSessionVars().TxnCtx.Histroy = hist
 	return hist
 }
@@ -189,7 +205,7 @@ func GetRows(rs ast.RecordSet) ([][]types.Datum, error) {
 		return nil, nil
 	}
 	var rows [][]types.Datum
-	defer terror.Call(rs.Close)
+	defer rs.Close()
 	// Negative limit means no limit.
 	for {
 		row, err := rs.Next()
@@ -248,11 +264,11 @@ func newStoreWithRetry(path string, maxRetries int) (kv.Storage, error) {
 	}
 
 	var s kv.Storage
-	err1 := util.RunWithRetry(maxRetries, retryInterval, func() (bool, error) {
+	util.RunWithRetry(maxRetries, retryInterval, func() (bool, error) {
 		s, err = d.Open(path)
 		return kv.IsRetryableError(err), err
 	})
-	return s, errors.Trace(err1)
+	return s, errors.Trace(err)
 }
 
 var queryStmtTable = []string{"explain", "select", "show", "execute", "describe", "desc", "admin"}
@@ -289,8 +305,6 @@ func IsQuery(sql string) bool {
 
 func init() {
 	// Register default memory and goleveldb storage
-	err := RegisterLocalStore("memory", goleveldb.MemoryDriver{})
-	terror.Log(errors.Trace(err))
-	err = RegisterLocalStore("goleveldb", goleveldb.Driver{})
-	terror.Log(errors.Trace(err))
+	RegisterLocalStore("memory", goleveldb.MemoryDriver{})
+	RegisterLocalStore("goleveldb", goleveldb.Driver{})
 }

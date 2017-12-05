@@ -10,7 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package types
 
 import (
@@ -32,7 +31,7 @@ func (s *testMyTimeSuite) TestWeekBehaviour(c *C) {
 }
 
 func (s *testMyTimeSuite) TestWeek(c *C) {
-	tests := []struct {
+	cases := []struct {
 		Input  mysqlTime
 		Mode   int
 		Expect int
@@ -42,9 +41,9 @@ func (s *testMyTimeSuite) TestWeek(c *C) {
 		{mysqlTime{2008, 12, 31, 0, 0, 0, 0}, 1, 53},
 	}
 
-	for ith, tt := range tests {
-		_, week := calcWeek(&tt.Input, weekMode(tt.Mode))
-		c.Check(week, Equals, tt.Expect, Commentf("%d failed.", ith))
+	for ith, t := range cases {
+		_, week := calcWeek(&t.Input, weekMode(t.Mode))
+		c.Check(week, Equals, t.Expect, Commentf("%d failed.", ith))
 	}
 }
 
@@ -58,7 +57,7 @@ func (s *testMyTimeSuite) TestCalcDaynr(c *C) {
 }
 
 func (s *testMyTimeSuite) TestCalcTimeDiff(c *C) {
-	tests := []struct {
+	cases := []struct {
 		T1     mysqlTime
 		T2     mysqlTime
 		Sign   int
@@ -77,24 +76,18 @@ func (s *testMyTimeSuite) TestCalcTimeDiff(c *C) {
 			1,
 			mysqlTime{0, 0, 0, 10, 0, 2, 0},
 		},
-		{
-			mysqlTime{0, 0, 0, 1, 2, 3, 0},
-			mysqlTime{0, 0, 0, 5, 2, 0, 0},
-			-1,
-			mysqlTime{0, 0, 0, 6, 4, 3, 0},
-		},
 	}
 
-	for i, tt := range tests {
-		seconds, microseconds, _ := calcTimeDiff(&tt.T1, &tt.T2, tt.Sign)
+	for i, t := range cases {
+		seconds, microseconds, _ := calcTimeDiff(&t.T1, &t.T2, t.Sign)
 		var result mysqlTime
 		calcTimeFromSec(&result, seconds, microseconds)
-		c.Assert(result, Equals, tt.Expect, Commentf("%d failed.", i))
+		c.Assert(result, Equals, t.Expect, Commentf("%d failed.", i))
 	}
 }
 
 func (s *testMyTimeSuite) TestCompareTime(c *C) {
-	tests := []struct {
+	cases := []struct {
 		T1     mysqlTime
 		T2     mysqlTime
 		Expect int
@@ -106,14 +99,14 @@ func (s *testMyTimeSuite) TestCompareTime(c *C) {
 		{mysqlTime{9999, 12, 30, 23, 59, 59, 999999}, mysqlTime{0, 1, 2, 3, 4, 5, 6}, 1},
 	}
 
-	for _, tt := range tests {
-		c.Assert(compareTime(&tt.T1, &tt.T2), Equals, tt.Expect)
-		c.Assert(compareTime(&tt.T2, &tt.T1), Equals, -tt.Expect)
+	for _, t := range cases {
+		c.Assert(compareTime(&t.T1, &t.T2), Equals, t.Expect)
+		c.Assert(compareTime(&t.T2, &t.T1), Equals, -t.Expect)
 	}
 }
 
 func (s *testMyTimeSuite) TestGetDateFromDaynr(c *C) {
-	tests := []struct {
+	cases := []struct {
 		daynr uint
 		year  uint
 		month uint
@@ -133,16 +126,16 @@ func (s *testMyTimeSuite) TestGetDateFromDaynr(c *C) {
 		{3652424, 9999, 12, 31},
 	}
 
-	for _, tt := range tests {
-		yy, mm, dd := getDateFromDaynr(tt.daynr)
-		c.Assert(yy, Equals, tt.year)
-		c.Assert(mm, Equals, tt.month)
-		c.Assert(dd, Equals, tt.day)
+	for _, t := range cases {
+		yy, mm, dd := getDateFromDaynr(t.daynr)
+		c.Assert(yy, Equals, t.year)
+		c.Assert(mm, Equals, t.month)
+		c.Assert(dd, Equals, t.day)
 	}
 }
 
 func (s *testMyTimeSuite) TestMixDateAndTime(c *C) {
-	tests := []struct {
+	cases := []struct {
 		date   mysqlTime
 		time   mysqlTime
 		neg    bool
@@ -180,33 +173,8 @@ func (s *testMyTimeSuite) TestMixDateAndTime(c *C) {
 		},
 	}
 
-	for ith, t := range tests {
+	for ith, t := range cases {
 		mixDateAndTime(&t.date, &t.time, t.neg)
 		c.Assert(compareTime(&t.date, &t.expect), Equals, 0, Commentf("%d", ith))
-	}
-}
-
-func (s *testMyTimeSuite) TestIsLeapYear(c *C) {
-	tests := []struct {
-		T      mysqlTime
-		Expect bool
-	}{
-		{mysqlTime{1960, 1, 1, 0, 0, 0, 0}, true},
-		{mysqlTime{1963, 2, 21, 0, 0, 0, 0}, false},
-		{mysqlTime{2008, 11, 25, 0, 0, 0, 0}, true},
-		{mysqlTime{2017, 4, 24, 0, 0, 0, 0}, false},
-		{mysqlTime{1988, 2, 29, 0, 0, 0, 0}, true},
-		{mysqlTime{2000, 3, 15, 0, 0, 0, 0}, true},
-		{mysqlTime{1992, 5, 3, 0, 0, 0, 0}, true},
-		{mysqlTime{2024, 10, 1, 0, 0, 0, 0}, true},
-		{mysqlTime{2016, 6, 29, 0, 0, 0, 0}, true},
-		{mysqlTime{2015, 6, 29, 0, 0, 0, 0}, false},
-		{mysqlTime{2014, 9, 31, 0, 0, 0, 0}, false},
-		{mysqlTime{2001, 12, 7, 0, 0, 0, 0}, false},
-		{mysqlTime{1989, 7, 6, 0, 0, 0, 0}, false},
-	}
-
-	for _, tt := range tests {
-		c.Assert(tt.T.IsLeapYear(), Equals, tt.Expect)
 	}
 }

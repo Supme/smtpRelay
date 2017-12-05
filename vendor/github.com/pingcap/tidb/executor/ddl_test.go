@@ -19,13 +19,17 @@ import (
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/plan"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/util/testkit"
+	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
 )
 
 func (s *testSuite) TestTruncateTable(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec(`drop table if exists truncate_test;`)
@@ -39,6 +43,10 @@ func (s *testSuite) TestTruncateTable(c *C) {
 }
 
 func (s *testSuite) TestCreateTable(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	// Test create an exist database
@@ -85,35 +93,39 @@ func (s *testSuite) TestCreateTable(c *C) {
 	tk.MustExec("insert into create_auto_increment_test (name) values ('bb')")
 	tk.MustExec("insert into create_auto_increment_test (name) values ('cc')")
 	r := tk.MustQuery("select * from create_auto_increment_test;")
-	r.Check(testkit.Rows("999 aa", "1000 bb", "1001 cc"))
+	rowStr1 := fmt.Sprintf("%v %v", 999, []byte("aa"))
+	rowStr2 := fmt.Sprintf("%v %v", 1000, []byte("bb"))
+	rowStr3 := fmt.Sprintf("%v %v", 1001, []byte("cc"))
+	r.Check(testkit.Rows(rowStr1, rowStr2, rowStr3))
 	tk.MustExec("drop table create_auto_increment_test")
 	tk.MustExec("create table create_auto_increment_test (id int not null auto_increment, name varchar(255), primary key(id)) auto_increment = 1999;")
 	tk.MustExec("insert into create_auto_increment_test (name) values ('aa')")
 	tk.MustExec("insert into create_auto_increment_test (name) values ('bb')")
 	tk.MustExec("insert into create_auto_increment_test (name) values ('cc')")
 	r = tk.MustQuery("select * from create_auto_increment_test;")
-	r.Check(testkit.Rows("1999 aa", "2000 bb", "2001 cc"))
+	rowStr1 = fmt.Sprintf("%v %v", 1999, []byte("aa"))
+	rowStr2 = fmt.Sprintf("%v %v", 2000, []byte("bb"))
+	rowStr3 = fmt.Sprintf("%v %v", 2001, []byte("cc"))
+	r.Check(testkit.Rows(rowStr1, rowStr2, rowStr3))
 	tk.MustExec("drop table create_auto_increment_test")
 	tk.MustExec("create table create_auto_increment_test (id int not null auto_increment, name varchar(255), key(id)) auto_increment = 1000;")
 	tk.MustExec("insert into create_auto_increment_test (name) values ('aa')")
 	r = tk.MustQuery("select * from create_auto_increment_test;")
-	r.Check(testkit.Rows("1000 aa"))
+	rowStr1 = fmt.Sprintf("%v %v", 1000, []byte("aa"))
+	r.Check(testkit.Rows(rowStr1))
 }
 
 func (s *testSuite) TestCreateDropDatabase(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("create database if not exists drop_test;")
 	tk.MustExec("drop database if exists drop_test;")
 	tk.MustExec("create database drop_test;")
-	tk.MustExec("use drop_test;")
 	tk.MustExec("drop database drop_test;")
-	_, err := tk.Exec("drop table t;")
-	c.Assert(err.Error(), Equals, plan.ErrNoDB.Error())
-	_, err = tk.Exec("select * from t;")
-	c.Assert(err.Error(), Equals, plan.ErrNoDB.Error())
 }
 
 func (s *testSuite) TestCreateDropTable(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("create table if not exists drop_test (a int)")
@@ -123,6 +135,7 @@ func (s *testSuite) TestCreateDropTable(c *C) {
 }
 
 func (s *testSuite) TestCreateDropIndex(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("create table if not exists drop_test (a int)")
@@ -132,6 +145,7 @@ func (s *testSuite) TestCreateDropIndex(c *C) {
 }
 
 func (s *testSuite) TestAlterTableAddColumn(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("create table if not exists alter_test (c1 int)")
@@ -139,6 +153,7 @@ func (s *testSuite) TestAlterTableAddColumn(c *C) {
 	tk.MustExec("alter table alter_test add column c2 timestamp default current_timestamp")
 	time.Sleep(1 * time.Second)
 	now := time.Now().Add(-time.Duration(1 * time.Second)).Format(types.TimeFormat)
+	rowStr := fmt.Sprintf("%v", now)
 	r, err := tk.Exec("select c2 from alter_test")
 	c.Assert(err, IsNil)
 	row, err := r.Next()
@@ -147,10 +162,12 @@ func (s *testSuite) TestAlterTableAddColumn(c *C) {
 	t := row.Data[0].GetMysqlTime()
 	c.Assert(now, GreaterEqual, t.String())
 	tk.MustExec("alter table alter_test add column c3 varchar(50) default 'CURRENT_TIMESTAMP'")
-	tk.MustQuery("select c3 from alter_test").Check(testkit.Rows("CURRENT_TIMESTAMP"))
+	rowStr = fmt.Sprintf("%v", []byte("CURRENT_TIMESTAMP"))
+	tk.MustQuery("select c3 from alter_test").Check(testkit.Rows(rowStr))
 }
 
 func (s *testSuite) TestAddNotNullColumnNoDefault(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("create table nn (c1 int)")
@@ -172,10 +189,10 @@ func (s *testSuite) TestAddNotNullColumnNoDefault(c *C) {
 }
 
 func (s *testSuite) TestAlterTableModifyColumn(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
-	tk.MustExec("drop table if exists mc")
-	tk.MustExec("create table mc(c1 int, c2 varchar(10))")
+	tk.MustExec("create table if not exists mc (c1 int, c2 varchar(10))")
 	_, err := tk.Exec("alter table mc modify column c1 short")
 	c.Assert(err, NotNil)
 	tk.MustExec("alter table mc modify column c1 bigint")
@@ -190,11 +207,12 @@ func (s *testSuite) TestAlterTableModifyColumn(c *C) {
 	tk.MustExec("alter table mc modify column c2 text")
 	result := tk.MustQuery("show create table mc")
 	createSQL := result.Rows()[0][1]
-	expected := "CREATE TABLE `mc` (\n  `c1` bigint(20) DEFAULT NULL,\n  `c2` text DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin"
+	expected := "CREATE TABLE `mc` (\n  `c1` bigint(21) DEFAULT NULL,\n  `c2` text DEFAULT NULL\n) ENGINE=InnoDB"
 	c.Assert(createSQL, Equals, expected)
 }
 
 func (s *testSuite) TestDefaultDBAfterDropCurDB(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 
 	testSQL := `create database if not exists test_db CHARACTER SET latin1 COLLATE latin1_swedish_ci;`
@@ -214,6 +232,7 @@ func (s *testSuite) TestDefaultDBAfterDropCurDB(c *C) {
 }
 
 func (s *testSuite) TestRenameTable(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 
 	tk.MustExec("create database rename1")
@@ -231,32 +250,4 @@ func (s *testSuite) TestRenameTable(c *C) {
 	tk.MustExec("drop database rename1")
 	tk.MustExec("drop database rename2")
 	tk.MustExec("drop database rename3")
-}
-
-func (s *testSuite) TestUnsupportedCharset(c *C) {
-	tk := testkit.NewTestKit(c, s.store)
-	dbName := "unsupported_charset"
-	tk.MustExec("create database " + dbName)
-	tk.MustExec("use " + dbName)
-	tests := []struct {
-		charset string
-		valid   bool
-	}{
-		{"charset UTF8 collate UTF8_bin", true},
-		{"charset utf8mb4", true},
-		{"charset utf16", false},
-		{"charset latin1", true},
-		{"charset binary", true},
-		{"charset ascii", true},
-	}
-	for i, tt := range tests {
-		sql := fmt.Sprintf("create table t%d (a varchar(10) %s)", i, tt.charset)
-		if tt.valid {
-			tk.MustExec(sql)
-		} else {
-			_, err := tk.Exec(sql)
-			c.Assert(err, NotNil, Commentf(sql))
-		}
-	}
-	tk.MustExec("drop database " + dbName)
 }

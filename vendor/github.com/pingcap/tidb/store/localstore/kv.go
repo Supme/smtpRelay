@@ -20,12 +20,10 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/localstore/engine"
-	"github.com/pingcap/tidb/store/tikv/oracle"
-	"github.com/pingcap/tidb/store/tikv/oracle/oracles"
 	"github.com/pingcap/tidb/util/segmentmap"
 	"github.com/twinj/uuid"
 )
@@ -175,8 +173,8 @@ func (s *dbStore) doCommit(txn *dbTxn) error {
 		return errors.Trace(err)
 	}
 	b := s.db.NewBatch()
-	err = txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
-		mvccKey := MvccEncodeVersionKey(k, commitVer)
+	txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
+		mvccKey := MvccEncodeVersionKey(kv.Key(k), commitVer)
 		if len(value) == 0 { // Deleted marker
 			b.Put(mvccKey, nil)
 			s.compactor.OnDelete(k)
@@ -186,9 +184,6 @@ func (s *dbStore) doCommit(txn *dbTxn) error {
 		}
 		return nil
 	})
-	if err != nil {
-		return errors.Trace(err)
-	}
 	err = s.writeBatch(b)
 	if err != nil {
 		return errors.Trace(err)
@@ -236,8 +231,7 @@ type dbStore struct {
 	closed       bool
 	committingTS uint64
 
-	pd     localPD
-	oracle oracle.Oracle
+	pd localPD
 }
 
 type storeCache struct {
@@ -308,7 +302,6 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 		db:         db,
 		compactor:  newLocalCompactor(localCompactDefaultPolicy, db),
 		closed:     false,
-		oracle:     oracles.NewLocalOracle(),
 	}
 	s.recentUpdates, err = segmentmap.NewSegmentMap(100)
 	if err != nil {
@@ -355,10 +348,6 @@ func (s *dbStore) GetSnapshot(ver kv.Version) (kv.Snapshot, error) {
 
 func (s *dbStore) GetClient() kv.Client {
 	return &dbClient{store: s, regionInfo: s.pd.GetRegionInfo()}
-}
-
-func (s *dbStore) GetOracle() oracle.Oracle {
-	return s.oracle
 }
 
 func (s *dbStore) CurrentVersion() (kv.Version, error) {
@@ -412,10 +401,6 @@ func (s *dbStore) writeBatch(b engine.Batch) error {
 	}
 
 	return nil
-}
-
-func (s *dbStore) SupportDeleteRange() (supported bool) {
-	return false
 }
 
 func (s *dbStore) newBatch() engine.Batch {

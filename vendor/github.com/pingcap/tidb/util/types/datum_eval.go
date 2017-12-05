@@ -16,7 +16,6 @@ package types
 import (
 	"math"
 
-	"github.com/cznic/mathutil"
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/parser/opcode"
 	"github.com/pingcap/tidb/sessionctx/variable"
@@ -38,10 +37,7 @@ func CoerceArithmetic(sc *variable.StatementContext, a Datum) (d Datum, err erro
 		t := a.GetMysqlTime()
 		de := t.ToNumber()
 		if t.Fsp == 0 {
-			iVal, err := de.ToInt()
-			if err != nil {
-				return d, errors.Trace(err)
-			}
+			iVal, _ := de.ToInt()
 			d.SetInt64(iVal)
 			return d, nil
 		}
@@ -52,19 +48,18 @@ func CoerceArithmetic(sc *variable.StatementContext, a Datum) (d Datum, err erro
 		du := a.GetMysqlDuration()
 		de := du.ToNumber()
 		if du.Fsp == 0 {
-			iVal, err := de.ToInt()
-			if err != nil {
-				return d, errors.Trace(err)
-			}
+			iVal, _ := de.ToInt()
 			d.SetInt64(iVal)
 			return d, nil
 		}
 		d.SetMysqlDecimal(de)
 		return d, nil
-	case KindBinaryLiteral, KindMysqlBit:
-		val, err1 := a.GetBinaryLiteral().ToInt()
-		d.SetUint64(val)
-		return d, err1
+	case KindMysqlHex:
+		d.SetFloat64(a.GetMysqlHex().ToNumber())
+		return d, nil
+	case KindMysqlBit:
+		d.SetFloat64(a.GetMysqlBit().ToNumber())
+		return d, nil
 	case KindMysqlEnum:
 		d.SetFloat64(a.GetMysqlEnum().ToNumber())
 		return d, nil
@@ -114,7 +109,6 @@ func ComputePlus(a, b Datum) (d Datum, err error) {
 			r := new(MyDecimal)
 			err = DecimalAdd(a.GetMysqlDecimal(), b.GetMysqlDecimal(), r)
 			d.SetMysqlDecimal(r)
-			d.SetFrac(mathutil.Max(a.Frac(), b.Frac()))
 			return d, err
 		}
 	}
@@ -291,7 +285,7 @@ func ComputeMod(sc *variable.StatementContext, a, b Datum) (d Datum, err error) 
 				return d, nil
 			} else if y < 0 {
 				// first is uint64, return uint64.
-				d.SetUint64(x % uint64(-y))
+				d.SetUint64(uint64(x % uint64(-y)))
 				return d, nil
 			}
 			d.SetUint64(x % uint64(y))
@@ -405,14 +399,13 @@ func ComputeIntDiv(sc *variable.StatementContext, a, b Datum) (d Datum, err erro
 // decimal2RoundUint converts a MyDecimal to an uint64 after rounding.
 func decimal2RoundUint(x *MyDecimal) (uint64, error) {
 	roundX := new(MyDecimal)
-	err := x.Round(roundX, 0, ModeHalfEven)
-	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	var uintX uint64
+	x.Round(roundX, 0)
+	var (
+		uintX uint64
+		err   error
+	)
 	if roundX.IsNegative() {
-		var intX int64
-		intX, err = roundX.ToInt()
+		intX, err := roundX.ToInt()
 		if err != nil && err != ErrTruncated {
 			return 0, errors.Trace(err)
 		}
@@ -554,7 +547,7 @@ func ComputeRightShift(sc *variable.StatementContext, a, b Datum) (d Datum, err 
 	return d, nil
 }
 
-// convertNonInt2RoundUint64 converts a non-integer to an uint64
+// covertNonIntegerToUint64 coverts a non-integer to an uint64
 func convertNonInt2RoundUint64(sc *variable.StatementContext, x Datum) (d uint64, err error) {
 	decimalX, err := x.ToDecimal(sc)
 	if err != nil {

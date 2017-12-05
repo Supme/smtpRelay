@@ -20,7 +20,6 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/sessionctx/variable"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
 )
@@ -103,64 +102,41 @@ func (s *testVarsutilSuite) TestVarsutil(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(val, Equals, "1")
 
+	// Test case for get TiDBSkipDDLWait session variable.
+	val, err = GetSessionSystemVar(v, variable.TiDBSkipDDLWait)
+	c.Assert(val, Equals, "0")
+	c.Assert(v.SkipDDLWait, IsFalse)
+	SetSessionSystemVar(v, variable.TiDBSkipDDLWait, types.NewStringDatum("0"))
+	c.Assert(v.SkipDDLWait, IsFalse)
+	SetSessionSystemVar(v, variable.TiDBSkipDDLWait, types.NewStringDatum("1"))
+	c.Assert(v.SkipDDLWait, IsTrue)
+	val, err = GetSessionSystemVar(v, variable.TiDBSkipDDLWait)
+	c.Assert(val, Equals, "1")
+
 	// Test case for time_zone session variable.
-	tests := []struct {
-		input        string
-		expect       string
-		compareValue bool
-		diff         time.Duration
-	}{
-		{"Europe/Helsinki", "Europe/Helsinki", true, -2 * time.Hour},
-		{"US/Eastern", "US/Eastern", true, 5 * time.Hour},
-		//TODO: Check it out and reopen this case.
-		//{"SYSTEM", "Local", false, 0},
-		{"+10:00", "UTC", true, -10 * time.Hour},
-		{"-6:00", "UTC", true, 6 * time.Hour},
-	}
-	for _, tt := range tests {
-		err = SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum(tt.input))
-		c.Assert(err, IsNil)
-		c.Assert(v.TimeZone.String(), Equals, tt.expect)
-		if tt.compareValue {
-			SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum(tt.input))
-			t1 := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-			t2 := time.Date(2000, 1, 1, 0, 0, 0, 0, v.TimeZone)
-			c.Assert(t2.Sub(t1), Equals, tt.diff)
-		}
-	}
-	err = SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("6:00"))
-	c.Assert(err, NotNil)
-	c.Assert(terror.ErrorEqual(err, variable.ErrUnknownTimeZone), IsTrue)
+	SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("Europe/Helsinki"))
+	c.Assert(v.TimeZone.String(), Equals, "Europe/Helsinki")
+	SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("US/Eastern"))
+	c.Assert(v.TimeZone.String(), Equals, "US/Eastern")
+	SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("SYSTEM"))
+	c.Assert(v.TimeZone.String(), Equals, "Local")
+	SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("+10:00"))
+	c.Assert(v.TimeZone.String(), Equals, "UTC")
+	t1 := time.Date(2000, 1, 1, 0, 0, 0, 0, v.TimeZone)
+	t2 := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.Assert(t2.Sub(t1), Equals, 10*time.Hour)
+	SetSessionSystemVar(v, variable.TimeZone, types.NewStringDatum("-6:00"))
+	c.Assert(v.TimeZone.String(), Equals, "UTC")
 
 	// Test case for sql mode.
 	for str, mode := range mysql.Str2SQLMode {
 		SetSessionSystemVar(v, "sql_mode", types.NewStringDatum(str))
-		if modeParts, exists := mysql.CombinationSQLMode[str]; exists {
-			for _, part := range modeParts {
-				mode |= mysql.Str2SQLMode[part]
-			}
-		}
 		c.Assert(v.SQLMode, Equals, mode)
 	}
 
 	// Combined sql_mode
 	SetSessionSystemVar(v, "sql_mode", types.NewStringDatum("REAL_AS_FLOAT,ANSI_QUOTES"))
 	c.Assert(v.SQLMode, Equals, mysql.ModeRealAsFloat|mysql.ModeANSIQuotes)
-
-	// Test case for tidb_index_serial_scan_concurrency.
-	c.Assert(v.IndexSerialScanConcurrency, Equals, 1)
-	SetSessionSystemVar(v, variable.TiDBIndexSerialScanConcurrency, types.NewStringDatum("4"))
-	c.Assert(v.IndexSerialScanConcurrency, Equals, 4)
-
-	// Test case for tidb_batch_insert.
-	c.Assert(v.BatchInsert, IsFalse)
-	SetSessionSystemVar(v, variable.TiDBBatchInsert, types.NewStringDatum("1"))
-	c.Assert(v.BatchInsert, IsTrue)
-
-	//Test case for tidb_max_row_count_for_inlj.
-	c.Assert(v.MaxRowCountForINLJ, Equals, 128)
-	SetSessionSystemVar(v, variable.TiDBMaxRowCountForINLJ, types.NewStringDatum("127"))
-	c.Assert(v.MaxRowCountForINLJ, Equals, 127)
 }
 
 type mockGlobalAccessor struct {

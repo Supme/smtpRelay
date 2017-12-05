@@ -14,16 +14,18 @@
 package types
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/juju/errors"
 )
 
+// ErrArithOverflow is the error for arthimetic operation overflow.
+var ErrArithOverflow = errors.New("operation overflow")
+
 // AddUint64 adds uint64 a and b if no overflow, else returns error.
 func AddUint64(a uint64, b uint64) (uint64, error) {
 	if math.MaxUint64-a < b {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return a + b, nil
 }
@@ -32,7 +34,7 @@ func AddUint64(a uint64, b uint64) (uint64, error) {
 func AddInt64(a int64, b int64) (int64, error) {
 	if (a > 0 && b > 0 && math.MaxInt64-a < b) ||
 		(a < 0 && b < 0 && math.MinInt64-a > b) {
-		return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 
 	return a + b, nil
@@ -45,7 +47,7 @@ func AddInteger(a uint64, b int64) (uint64, error) {
 	}
 
 	if uint64(-b) > a {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return a - uint64(-b), nil
 }
@@ -53,7 +55,7 @@ func AddInteger(a uint64, b int64) (uint64, error) {
 // SubUint64 subtracts uint64 a with b and returns uint64 if no overflow error.
 func SubUint64(a uint64, b uint64) (uint64, error) {
 	if a < b {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return a - b, nil
 }
@@ -63,7 +65,7 @@ func SubInt64(a int64, b int64) (int64, error) {
 	if (a > 0 && b < 0 && math.MaxInt64-a < -b) ||
 		(a < 0 && b > 0 && math.MinInt64-a > -b) ||
 		(a == 0 && b == math.MinInt64) {
-		return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return a - b, nil
 }
@@ -79,7 +81,7 @@ func SubUintWithInt(a uint64, b int64) (uint64, error) {
 // SubIntWithUint subtracts int64 a with uint64 b and returns uint64 if no overflow error.
 func SubIntWithUint(a int64, b uint64) (uint64, error) {
 	if a < 0 || uint64(a) < b {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return uint64(a) - b, nil
 }
@@ -87,7 +89,7 @@ func SubIntWithUint(a int64, b uint64) (uint64, error) {
 // MulUint64 multiplies uint64 a and b and returns uint64 if no overflow error.
 func MulUint64(a uint64, b uint64) (uint64, error) {
 	if b > 0 && a > math.MaxUint64/b {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 	return a * b, nil
 }
@@ -123,7 +125,7 @@ func MulInt64(a int64, b int64) (int64, error) {
 	if negative {
 		// negative result
 		if res > math.MaxInt64+1 {
-			return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+			return 0, errors.Trace(ErrArithOverflow)
 		}
 
 		return -int64(res), nil
@@ -131,7 +133,7 @@ func MulInt64(a int64, b int64) (int64, error) {
 
 	// positive result
 	if res > math.MaxInt64 {
-		return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 
 	return int64(res), nil
@@ -144,7 +146,7 @@ func MulInteger(a uint64, b int64) (uint64, error) {
 	}
 
 	if b < 0 {
-		return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 
 	return MulUint64(a, uint64(b))
@@ -154,7 +156,7 @@ func MulInteger(a uint64, b int64) (uint64, error) {
 // It just checks overflow, if b is zero, a "divide by zero" panic throws.
 func DivInt64(a int64, b int64) (int64, error) {
 	if a == math.MinInt64 && b == -1 {
-		return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+		return 0, errors.Trace(ErrArithOverflow)
 	}
 
 	return a / b, nil
@@ -165,7 +167,7 @@ func DivInt64(a int64, b int64) (int64, error) {
 func DivUintWithInt(a uint64, b int64) (uint64, error) {
 	if b < 0 {
 		if a != 0 && uint64(-b) <= a {
-			return 0, ErrOverflow.GenByArgs("BIGINT UNSIGNED", fmt.Sprintf("(%d, %d)", a, b))
+			return 0, errors.Trace(ErrArithOverflow)
 		}
 
 		return 0, nil
@@ -179,7 +181,7 @@ func DivUintWithInt(a uint64, b int64) (uint64, error) {
 func DivIntWithUint(a int64, b uint64) (uint64, error) {
 	if a < 0 {
 		if uint64(-a) >= b {
-			return 0, ErrOverflow.GenByArgs("BIGINT", fmt.Sprintf("(%d, %d)", a, b))
+			return 0, errors.Trace(ErrArithOverflow)
 		}
 
 		return 0, nil

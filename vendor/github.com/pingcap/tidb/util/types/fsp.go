@@ -33,8 +33,7 @@ const (
 	DefaultFsp int = 0
 )
 
-// CheckFsp checks whether fsp is in valid range.
-func CheckFsp(fsp int) (int, error) {
+func checkFsp(fsp int) (int, error) {
 	if fsp == UnspecifiedFsp {
 		return DefaultFsp, nil
 	}
@@ -52,7 +51,7 @@ func parseFrac(s string, fsp int) (v int, overflow bool, err error) {
 		return 0, false, nil
 	}
 
-	fsp, err = CheckFsp(fsp)
+	fsp, err = checkFsp(fsp)
 	if err != nil {
 		return 0, false, errors.Trace(err)
 	}

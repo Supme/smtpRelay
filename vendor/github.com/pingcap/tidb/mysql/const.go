@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2015 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,19 @@
 package mysql
 
 import (
-	"fmt"
 	"strings"
 )
 
-func newInvalidModeErr(s string) error {
-	return NewErr(ErrWrongValueForVar, "sql_mode", s)
-}
-
-// Version information.
-var (
-	// TiDBReleaseVersion is initialized by (git describe --tags) in Makefile.
-	TiDBReleaseVersion = "None"
-
-	// ServerVersion is the version information of this tidb-server in MySQL's format.
-	ServerVersion = fmt.Sprintf("5.7.1-TiDB-%s", TiDBReleaseVersion)
+// Version informations.
+const (
+	MinProtocolVersion byte = 10
+	MaxPayloadLen      int  = 1<<24 - 1
+	// The version number should be three digits.
+	// See https://dev.mysql.com/doc/refman/5.7/en/which-version.html
+	ServerVersion string = "5.7.1-TiDB-1.0"
 )
 
-// Header information.
+// Header informations.
 const (
 	OKHeader          byte = 0x00
 	ErrHeader         byte = 0xff
@@ -39,7 +34,7 @@ const (
 	LocalInFileHeader byte = 0xfb
 )
 
-// Server information.
+// Server informations.
 const (
 	ServerStatusInTrans            uint16 = 0x0001
 	ServerStatusAutocommit         uint16 = 0x0002
@@ -56,34 +51,13 @@ const (
 )
 
 // Identifier length limitations.
-// See https://dev.mysql.com/doc/refman/5.7/en/identifiers.html
 const (
-	// MaxPayloadLen is the max packet payload length.
-	MaxPayloadLen int = 1<<24 - 1
-	// MaxTableNameLength is max length of table name identifier.
-	MaxTableNameLength int = 64
-	// MaxDatabaseNameLength is max length of database name identifier.
+	MaxTableNameLength    int = 64
 	MaxDatabaseNameLength int = 64
-	// MaxColumnNameLength is max length of column name identifier.
-	MaxColumnNameLength int = 64
-	// MaxKeyParts is max length of key parts.
-	MaxKeyParts int = 16
-	// MaxIndexIdentifierLen is max length of index identifier.
-	MaxIndexIdentifierLen int = 64
-	// MaxConstraintIdentifierLen is max length of constrain identifier.
-	MaxConstraintIdentifierLen int = 64
-	// MaxViewIdentifierLen is max length of view identifier.
-	MaxViewIdentifierLen int = 64
-	// MaxAliasIdentifierLen is max length of alias identifier.
-	MaxAliasIdentifierLen int = 256
-	// MaxUserDefinedVariableLen is max length of user-defined variable.
-	MaxUserDefinedVariableLen int = 64
+	MaxColumnNameLength   int = 64
 )
 
-// ErrTextLength error text length limit.
-const ErrTextLength = 80
-
-// Command information.
+// Command informations.
 const (
 	ComSleep byte = iota
 	ComQuit
@@ -119,7 +93,7 @@ const (
 	ComResetConnection
 )
 
-// Client information.
+// Client informations.
 const (
 	ClientLongPassword uint32 = 1 << iota
 	ClientFoundRows
@@ -145,12 +119,12 @@ const (
 	ClientPluginAuthLenencClientData
 )
 
-// Cache type information.
+// Cache type informations.
 const (
 	TypeNoCache byte = 0xff
 )
 
-// Auth name information.
+// Auth name informations.
 const (
 	AuthName = "mysql_native_password"
 )
@@ -192,20 +166,12 @@ const (
 	DeletePriv
 	// ShowDBPriv is the privilege to run show databases statement.
 	ShowDBPriv
-	// SuperPriv enables many operations and server behaviors.
-	SuperPriv
 	// CreateUserPriv is the privilege to create user.
 	CreateUserPriv
-	// TriggerPriv is not checked yet.
-	TriggerPriv
 	// DropPriv is the privilege to drop schema/table.
 	DropPriv
-	// ProcessPriv pertains to display of information about the threads executing within the server.
-	ProcessPriv
 	// GrantPriv is the privilege to grant privilege to user.
 	GrantPriv
-	// ReferencesPriv is not checked yet.
-	ReferencesPriv
 	// AlterPriv is the privilege to run alter statement.
 	AlterPriv
 	// ExecutePriv is the privilege to run execute statement.
@@ -216,46 +182,6 @@ const (
 	AllPriv
 )
 
-// AllPrivMask is the mask for PrivilegeType with all bits set to 1.
-const AllPrivMask = AllPriv - 1
-
-// MySQL type maximum length.
-const (
-	// For arguments that have no fixed number of decimals, the decimals value is set to 31,
-	// which is 1 more than the maximum number of decimals permitted for the DECIMAL, FLOAT, and DOUBLE data types.
-	NotFixedDec = 31
-
-	MaxIntWidth             = 20
-	MaxRealWidth            = 23
-	MaxDecimalScale         = 30
-	MaxDecimalWidth         = 65
-	MaxDateWidth            = 10 // YYYY-MM-DD.
-	MaxDatetimeWidthNoFsp   = 19 // YYYY-MM-DD HH:MM:SS
-	MaxDatetimeWidthWithFsp = 26 // YYYY-MM-DD HH:MM:SS[.fraction]
-	MaxDatetimeFullWidth    = 29 // YYYY-MM-DD HH:MM:SS.###### AM
-	MaxDurationWidthNoFsp   = 10 // HH:MM:SS
-	MaxDurationWidthWithFsp = 15 // HH:MM:SS[.fraction]
-	MaxBlobWidth            = 16777216
-)
-
-// MySQL max type field length.
-const (
-	MaxFieldCharLength    = 255
-	MaxFieldVarCharLength = 65535
-)
-
-// MySQL precision.
-const (
-	PrecisionForDouble = 53
-	PrecisionForFloat  = 24
-)
-
-// MaxTypeSetMembers is the number of set members.
-const MaxTypeSetMembers = 64
-
-// PWDHashLen is the length of password's hash.
-const PWDHashLen = 40
-
 // Priv2UserCol is the privilege to mysql.user table column name.
 var Priv2UserCol = map[PrivilegeType]string{
 	CreatePriv:     "Create_priv",
@@ -264,13 +190,9 @@ var Priv2UserCol = map[PrivilegeType]string{
 	UpdatePriv:     "Update_priv",
 	DeletePriv:     "Delete_priv",
 	ShowDBPriv:     "Show_db_priv",
-	SuperPriv:      "Super_priv",
 	CreateUserPriv: "Create_user_priv",
-	TriggerPriv:    "Trigger_priv",
 	DropPriv:       "Drop_priv",
-	ProcessPriv:    "Process_priv",
 	GrantPriv:      "Grant_priv",
-	ReferencesPriv: "References_priv",
 	AlterPriv:      "Alter_priv",
 	ExecutePriv:    "Execute_priv",
 	IndexPriv:      "Index_priv",
@@ -284,20 +206,16 @@ var Col2PrivType = map[string]PrivilegeType{
 	"Update_priv":      UpdatePriv,
 	"Delete_priv":      DeletePriv,
 	"Show_db_priv":     ShowDBPriv,
-	"Super_priv":       SuperPriv,
 	"Create_user_priv": CreateUserPriv,
-	"Trigger_priv":     TriggerPriv,
 	"Drop_priv":        DropPriv,
-	"Process_priv":     ProcessPriv,
 	"Grant_priv":       GrantPriv,
-	"References_priv":  ReferencesPriv,
 	"Alter_priv":       AlterPriv,
 	"Execute_priv":     ExecutePriv,
 	"Index_priv":       IndexPriv,
 }
 
 // AllGlobalPrivs is all the privileges in global scope.
-var AllGlobalPrivs = []PrivilegeType{SelectPriv, InsertPriv, UpdatePriv, DeletePriv, CreatePriv, DropPriv, ProcessPriv, GrantPriv, ReferencesPriv, AlterPriv, ShowDBPriv, SuperPriv, ExecutePriv, IndexPriv, CreateUserPriv, TriggerPriv}
+var AllGlobalPrivs = []PrivilegeType{SelectPriv, InsertPriv, UpdatePriv, DeletePriv, CreatePriv, DropPriv, GrantPriv, AlterPriv, ShowDBPriv, ExecutePriv, IndexPriv, CreateUserPriv}
 
 // Priv2Str is the map for privilege to string.
 var Priv2Str = map[PrivilegeType]string{
@@ -307,13 +225,9 @@ var Priv2Str = map[PrivilegeType]string{
 	UpdatePriv:     "Update",
 	DeletePriv:     "Delete",
 	ShowDBPriv:     "Show Databases",
-	SuperPriv:      "Super",
 	CreateUserPriv: "Create User",
-	TriggerPriv:    "Trigger",
 	DropPriv:       "Drop",
-	ProcessPriv:    "Process",
 	GrantPriv:      "Grant Option",
-	ReferencesPriv: "References",
 	AlterPriv:      "Alter",
 	ExecutePriv:    "Execute",
 	IndexPriv:      "Index",
@@ -399,26 +313,6 @@ var DefaultLengthOfTimeFraction = map[int]int{
 // See https://dev.mysql.com/doc/refman/5.7/en/sql-mode.html
 type SQLMode int
 
-// HasNoZeroDateMode detects if 'NO_ZERO_DATE' mode is set in SQLMode
-func (m SQLMode) HasNoZeroDateMode() bool {
-	return m&ModeNoZeroDate == ModeNoZeroDate
-}
-
-// HasNoZeroInDateMode detects if 'NO_ZERO_IN_DATE' mode is set in SQLMode
-func (m SQLMode) HasNoZeroInDateMode() bool {
-	return m&ModeNoZeroInDate == ModeNoZeroInDate
-}
-
-// HasErrorForDivisionByZeroMode detects if 'ERROR_FOR_DIVISION_BY_ZERO' mode is set in SQLMode
-func (m SQLMode) HasErrorForDivisionByZeroMode() bool {
-	return m&ModeErrorForDivisionByZero == ModeErrorForDivisionByZero
-}
-
-// HasStrictMode detects if 'STRICT_TRANS_TABLES' or 'STRICT_ALL_TABLES' mode is set in SQLMode
-func (m SQLMode) HasStrictMode() bool {
-	return m&ModeStrictTransTables == ModeStrictTransTables || m&ModeStrictAllTables == ModeStrictAllTables
-}
-
 // consts for sql modes.
 const (
 	ModeNone        SQLMode = 0
@@ -456,45 +350,14 @@ const (
 	ModePadCharToFullLength
 )
 
-// FormatSQLModeStr re-format 'SQL_MODE' variable.
-func FormatSQLModeStr(s string) string {
-	s = strings.ToUpper(strings.TrimRight(s, " "))
-	parts := strings.Split(s, ",")
-	var nonEmptyParts []string
-	existParts := make(map[string]string)
-	for _, part := range parts {
-		if len(part) == 0 {
-			continue
-		}
-		if modeParts, ok := CombinationSQLMode[part]; ok {
-			for _, modePart := range modeParts {
-				if _, exist := existParts[modePart]; !exist {
-					nonEmptyParts = append(nonEmptyParts, modePart)
-					existParts[modePart] = modePart
-				}
-			}
-		}
-		if _, exist := existParts[part]; !exist {
-			nonEmptyParts = append(nonEmptyParts, part)
-			existParts[part] = part
-		}
+// GetSQLMode gets the sql mode for string literal.
+func GetSQLMode(str string) SQLMode {
+	str = strings.ToUpper(str)
+	mode, ok := Str2SQLMode[str]
+	if !ok {
+		return ModeNone
 	}
-	return strings.Join(nonEmptyParts, ",")
-}
-
-// GetSQLMode gets the sql mode for string literal. SQL_mode is a list of different modes separated by commas.
-// The input string must be formatted by 'FormatSQLModeStr'
-func GetSQLMode(s string) (SQLMode, error) {
-	strs := strings.Split(s, ",")
-	var sqlMode SQLMode
-	for i, length := 0, len(strs); i < length; i++ {
-		mode, ok := Str2SQLMode[strs[i]]
-		if !ok && strs[i] != "" {
-			return sqlMode, newInvalidModeErr(strs[i])
-		}
-		sqlMode = sqlMode | mode
-	}
-	return sqlMode, nil
+	return mode
 }
 
 // Str2SQLMode is the string represent of sql_mode to sql_mode map.
@@ -532,52 +395,3 @@ var Str2SQLMode = map[string]SQLMode{
 	"NO_ENGINE_SUBSTITUTION":     ModeNoEngineSubstitution,
 	"PAD_CHAR_TO_FULL_LENGTH":    ModePadCharToFullLength,
 }
-
-// CombinationSQLMode is the special modes that provided as shorthand for combinations of mode values.
-// See https://dev.mysql.com/doc/refman/5.7/en/sql-mode.html#sql-mode-combo.
-var CombinationSQLMode = map[string][]string{
-	"ANSI":        {"REAL_AS_FLOAT", "PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "ONLY_FULL_GROUP_BY"},
-	"DB2":         {"PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS"},
-	"MAXDB":       {"PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS", "NO_AUTO_CREATE_USER"},
-	"MSSQL":       {"PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS"},
-	"MYSQL323":    {"MYSQL323", "HIGH_NOT_PRECEDENCE"},
-	"MYSQL40":     {"MYSQL40", "HIGH_NOT_PRECEDENCE"},
-	"ORACLE":      {"PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS", "NO_AUTO_CREATE_USER"},
-	"POSTGRESQL":  {"PIPES_AS_CONCAT", "ANSI_QUOTES", "IGNORE_SPACE", "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS"},
-	"TRADITIONAL": {"STRICT_TRANS_TABLES", "STRICT_ALL_TABLES", "NO_ZERO_IN_DATE", "NO_ZERO_DATE", "ERROR_FOR_DIVISION_BY_ZERO", "NO_AUTO_CREATE_USER", "NO_ENGINE_SUBSTITUTION"},
-}
-
-// FormatFunc is the locale format function signature.
-type FormatFunc func(string, string) (string, error)
-
-// GetLocaleFormatFunction get the format function for sepcific locale.
-func GetLocaleFormatFunction(loc string) FormatFunc {
-	locale, exist := locale2FormatFunction[loc]
-	if !exist {
-		return formatNotSupport
-	}
-	return locale
-}
-
-// locale2FormatFunction is the string represent of locale format function.
-var locale2FormatFunction = map[string]FormatFunc{
-	"en_US": formatENUS,
-	"zh_CN": formatZHCN,
-}
-
-// PriorityEnum is defined for Priority const values.
-type PriorityEnum int
-
-// Priority const values.
-// See https://dev.mysql.com/doc/refman/5.7/en/insert.html
-const (
-	NoPriority PriorityEnum = iota
-	LowPriority
-	HighPriority
-	DelayedPriority
-)
-
-// PrimaryKeyName defines primary key name.
-const (
-	PrimaryKeyName = "PRIMARY"
-)

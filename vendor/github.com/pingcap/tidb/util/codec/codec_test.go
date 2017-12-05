@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
-	"github.com/pingcap/tidb/util/types/json"
 )
 
 func TestT(t *testing.T) {
@@ -67,8 +66,8 @@ func (s *testCodecSuite) TestCodecKey(c *C) {
 		},
 
 		{
-			types.MakeDatums(types.NewBinaryLiteralFromUint(100, -1), types.NewBinaryLiteralFromUint(100, 4)),
-			types.MakeDatums(uint64(100), uint64(100)),
+			types.MakeDatums(types.Hex{Value: 100}, types.Bit{Value: 100, Width: 8}),
+			types.MakeDatums(int64(100), uint64(100)),
 		},
 
 		{
@@ -294,7 +293,7 @@ func (s *testCodecSuite) TestNumberCodec(c *C) {
 	b, u, err := DecodeComparableUvarint(b)
 	c.Assert(err, IsNil)
 	c.Assert(u, Equals, uint64(1))
-	_, i, err = DecodeComparableVarint(b)
+	b, i, err = DecodeComparableVarint(b)
 	c.Assert(err, IsNil)
 	c.Assert(i, Equals, int64(2))
 }
@@ -504,7 +503,7 @@ func (s *testCodecSuite) TestBytes(c *C) {
 }
 
 func parseTime(c *C, s string) types.Time {
-	m, err := types.ParseTime(nil, s, mysql.TypeDatetime, types.DefaultFsp)
+	m, err := types.ParseTime(s, mysql.TypeDatetime, types.DefaultFsp)
 	c.Assert(err, IsNil)
 	return m
 }
@@ -533,7 +532,6 @@ func (s *testCodecSuite) TestTime(c *C) {
 		var t types.Time
 		t.Type = mysql.TypeDatetime
 		t.FromPackedUint(v[0].GetUint64())
-		t.TimeZone = nil
 		c.Assert(types.NewDatum(t), DeepEquals, m)
 	}
 
@@ -742,36 +740,6 @@ func (s *testCodecSuite) TestDecimal(c *C) {
 	}
 }
 
-func (s *testCodecSuite) TestJSON(c *C) {
-	defer testleak.AfterTest(c)()
-	tbl := []string{
-		"1234.00",
-		`{"a": "b"}`,
-	}
-
-	datums := make([]types.Datum, 0, len(tbl))
-	for _, t := range tbl {
-		var d types.Datum
-		j, err := json.ParseFromString(t)
-		c.Assert(err, IsNil)
-		d.SetMysqlJSON(j)
-		datums = append(datums, d)
-	}
-
-	bytes := make([]byte, 0, 4096)
-	bytes, err := encode(bytes, datums, false, false)
-	c.Assert(err, IsNil)
-
-	datums1, err := Decode(bytes, 2)
-	c.Assert(err, IsNil)
-
-	for i := range datums1 {
-		lhs := datums[i].GetMysqlJSON().String()
-		rhs := datums1[i].GetMysqlJSON().String()
-		c.Assert(lhs, Equals, rhs)
-	}
-}
-
 func (s *testCodecSuite) TestCut(c *C) {
 	defer testleak.AfterTest(c)()
 	table := []struct {
@@ -803,8 +771,8 @@ func (s *testCodecSuite) TestCut(c *C) {
 		},
 
 		{
-			types.MakeDatums(types.NewBinaryLiteralFromUint(100, -1), types.NewBinaryLiteralFromUint(100, 4)),
-			types.MakeDatums(uint64(100), uint64(100)),
+			types.MakeDatums(types.Hex{Value: 100}, types.Bit{Value: 100, Width: 8}),
+			types.MakeDatums(int64(100), uint64(100)),
 		},
 
 		{
@@ -849,20 +817,5 @@ func (s *testCodecSuite) TestCut(c *C) {
 			c.Assert(d, DeepEquals, ed, Commentf("%d:%d %#v", i, j, e))
 		}
 		c.Assert(b, HasLen, 0)
-	}
-}
-
-func (s *testCodecSuite) TestSetRawValues(c *C) {
-	datums := types.MakeDatums(1, "abc", 1.1, []byte("def"))
-	rowData, err := EncodeValue(nil, datums...)
-	c.Assert(err, IsNil)
-	values := make([]types.Datum, 4)
-	err = SetRawValues(rowData, values)
-	c.Assert(err, IsNil)
-	for i, rawVal := range values {
-		c.Assert(rawVal.Kind(), Equals, types.KindRaw)
-		encoded, err1 := EncodeValue(nil, datums[i])
-		c.Assert(err1, IsNil)
-		c.Assert(encoded, BytesEquals, rawVal.GetBytes())
 	}
 }

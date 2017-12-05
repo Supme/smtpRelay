@@ -23,21 +23,19 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util"
-	goctx "golang.org/x/net/context"
 )
 
 var _ context.Context = (*Context)(nil)
 
 // Context represents mocked context.Context.
 type Context struct {
-	values      map[fmt.Stringer]interface{}
-	txn         kv.Transaction // mock global variable
-	Store       kv.Storage     // mock global variable
+	values map[fmt.Stringer]interface{}
+	// mock global variable
+	txn         kv.Transaction
+	Store       kv.Storage
 	sessionVars *variable.SessionVars
-	mux         sync.Mutex // fix data race in ddl test.
-	ctx         goctx.Context
-	cancel      goctx.CancelFunc
-	sm          util.SessionManager
+	// Fix data race in ddl test.
+	mux sync.Mutex
 }
 
 // SetValue implements context.Context SetValue interface.
@@ -112,11 +110,6 @@ func (c *Context) NewTxn() error {
 	return nil
 }
 
-// RefreshTxnCtx implements the context.Context interface.
-func (c *Context) RefreshTxnCtx() error {
-	return errors.Trace(c.NewTxn())
-}
-
 // ActivePendingTxn implements the context.Context interface.
 func (c *Context) ActivePendingTxn() error {
 	if c.txn != nil {
@@ -147,38 +140,24 @@ func (c *Context) InitTxnWithStartTS(startTS uint64) error {
 	return nil
 }
 
-// GetStore gets the store of session.
-func (c *Context) GetStore() kv.Storage {
-	return c.Store
-}
-
 // GetSessionManager implements the context.Context interface.
 func (c *Context) GetSessionManager() util.SessionManager {
-	return c.sm
-}
-
-// SetSessionManager set the session manager.
-func (c *Context) SetSessionManager(sm util.SessionManager) {
-	c.sm = sm
+	return nil
 }
 
 // Cancel implements the Session interface.
 func (c *Context) Cancel() {
-	c.cancel()
 }
 
-// GoCtx returns standard context.Context that bind with current transaction.
-func (c *Context) GoCtx() goctx.Context {
-	return c.ctx
+// Done implements the context.Context interface.
+func (c *Context) Done() <-chan struct{} {
+	return nil
 }
 
 // NewContext creates a new mocked context.Context.
 func NewContext() *Context {
-	ctx, cancel := goctx.WithCancel(goctx.Background())
 	return &Context{
 		values:      make(map[fmt.Stringer]interface{}),
 		sessionVars: variable.NewSessionVars(),
-		ctx:         ctx,
-		cancel:      cancel,
 	}
 }

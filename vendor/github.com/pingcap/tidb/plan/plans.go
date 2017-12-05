@@ -14,28 +14,29 @@
 package plan
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/expression"
-	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/table"
-	"github.com/pingcap/tidb/util/auth"
 	"github.com/pingcap/tidb/util/types"
 )
 
-// ShowDDL is for showing DDL information.
-type ShowDDL struct {
-	basePlan
+// TableRange represents a range of row handle.
+type TableRange struct {
+	LowVal  int64
+	HighVal int64
 }
 
-// ShowDDLJobs is for showing DDL job list.
-type ShowDDLJobs struct {
+// IsPoint returns if the table range is a point.
+func (tr *TableRange) IsPoint() bool {
+	return tr.HighVal == tr.LowVal
+}
+
+// ShowDDL is for showing DDL information.
+type ShowDDL struct {
 	basePlan
 }
 
@@ -46,20 +47,78 @@ type CheckTable struct {
 	Tables []*ast.TableName
 }
 
-// CancelDDLJobs represents a cancel DDL jobs plan.
-type CancelDDLJobs struct {
-	basePlan
+// IndexRange represents an index range to be scanned.
+type IndexRange struct {
+	LowVal      []types.Datum
+	LowExclude  bool
+	HighVal     []types.Datum
+	HighExclude bool
+}
 
-	JobIDs []int64
+func datumToString(d types.Datum) string {
+	if d.Kind() == types.KindMinNotNull {
+		return "-inf"
+	}
+	if d.Kind() == types.KindMaxValue {
+		return "+inf"
+	}
+	return fmt.Sprintf("%v", d.GetValue())
+}
+
+// IsPoint returns if the index range is a point.
+func (ir *IndexRange) IsPoint(sc *variable.StatementContext) bool {
+	if len(ir.LowVal) != len(ir.HighVal) {
+		return false
+	}
+	for i := range ir.LowVal {
+		a := ir.LowVal[i]
+		b := ir.HighVal[i]
+		if a.Kind() == types.KindMinNotNull || b.Kind() == types.KindMaxValue {
+			return false
+		}
+		cmp, err := a.CompareDatum(sc, b)
+		if err != nil {
+			return false
+		}
+		if cmp != 0 {
+			return false
+		}
+	}
+	return !ir.LowExclude && !ir.HighExclude
+}
+
+func (ir *IndexRange) String() string {
+	lowStrs := make([]string, 0, len(ir.LowVal))
+	for _, d := range ir.LowVal {
+		lowStrs = append(lowStrs, datumToString(d))
+	}
+	highStrs := make([]string, 0, len(ir.LowVal))
+	for _, d := range ir.HighVal {
+		highStrs = append(highStrs, datumToString(d))
+	}
+	l, r := "[", "]"
+	if ir.LowExclude {
+		l = "("
+	}
+	if ir.HighExclude {
+		r = ")"
+	}
+	return l + strings.Join(lowStrs, " ") + "," + strings.Join(highStrs, " ") + r
 }
 
 // SelectLock represents a select lock plan.
 type SelectLock struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	Lock ast.SelectLockType
+}
+
+// Limit represents offset and limit plan.
+type Limit struct {
+	baseLogicalPlan
+
+	Offset uint64
+	Count  uint64
 }
 
 // Prepare represents prepare plan.
@@ -88,9 +147,7 @@ type Deallocate struct {
 
 // Show represents a show plan.
 type Show struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	Tp     ast.ShowStmtType // Databases/Tables/Columns/....
 	DBName string
@@ -98,7 +155,7 @@ type Show struct {
 	Column *ast.ColumnName // Used for `desc table column`.
 	Flag   int             // Some flag parsed from sql, such as FULL.
 	Full   bool
-	User   *auth.UserIdentity // Used for show grants.
+	User   string // Used for show grants.
 
 	// Used by show variables
 	GlobalScope bool
@@ -118,19 +175,9 @@ type Simple struct {
 	Statement ast.StmtNode
 }
 
-// InsertGeneratedColumns is for completing generated columns in Insert.
-// We resolve generation expressions in plan, and eval those in executor.
-type InsertGeneratedColumns struct {
-	Columns      []*ast.ColumnName
-	Exprs        []expression.Expression
-	OnDuplicates []*expression.Assignment
-}
-
 // Insert represents an insert plan.
 type Insert struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	Table       table.Table
 	tableSchema *expression.Schema
@@ -140,36 +187,18 @@ type Insert struct {
 	OnDuplicate []*expression.Assignment
 
 	IsReplace bool
-	Priority  mysql.PriorityEnum
-	IgnoreErr bool
-
-	// NeedFillDefaultValue is true when expr in value list reference other column.
-	NeedFillDefaultValue bool
-
-	GenCols InsertGeneratedColumns
-}
-
-// AnalyzeColumnsTask is used for analyze columns.
-type AnalyzeColumnsTask struct {
-	TableInfo *model.TableInfo
-	PKInfo    *model.ColumnInfo
-	ColsInfo  []*model.ColumnInfo
-	PushDown  bool
-}
-
-// AnalyzeIndexTask is used for analyze index.
-type AnalyzeIndexTask struct {
-	TableInfo *model.TableInfo
-	IndexInfo *model.IndexInfo
-	PushDown  bool
+	Priority  int
+	Ignore    bool
 }
 
 // Analyze represents an analyze plan
 type Analyze struct {
-	basePlan
+	baseLogicalPlan
 
-	ColTasks []AnalyzeColumnsTask
-	IdxTasks []AnalyzeIndexTask
+	Table      *ast.TableName
+	IdxOffsets []int
+	ColOffsets []int
+	PkOffset   int // Used only when pk is handle.
 }
 
 // LoadData represents a loaddata plan.
@@ -179,11 +208,8 @@ type LoadData struct {
 	IsLocal    bool
 	Path       string
 	Table      *ast.TableName
-	Columns    []*ast.ColumnName
 	FieldsInfo *ast.FieldsClause
 	LinesInfo  *ast.LinesClause
-
-	GenCols InsertGeneratedColumns
 }
 
 // DDL represents a DDL statement plan.
@@ -197,131 +223,5 @@ type DDL struct {
 type Explain struct {
 	basePlan
 
-	StmtPlan       Plan
-	Rows           [][]types.Datum
-	explainedPlans map[int]bool
-}
-
-func (e *Explain) prepareExplainInfo(p Plan, parent Plan) error {
-	for _, child := range p.Children() {
-		err := e.prepareExplainInfo(child, p)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	explain, err := json.MarshalIndent(p, "", "    ")
-	if err != nil {
-		return errors.Trace(err)
-	}
-	parentStr := ""
-	if parent != nil {
-		parentStr = parent.ExplainID()
-	}
-	row := types.MakeDatums(p.ExplainID(), string(explain), parentStr)
-	e.Rows = append(e.Rows, row)
-	return nil
-}
-
-// prepareExplainInfo4DAGTask generates the following information for every plan:
-// ["id", "parents", "task", "operator info"].
-func (e *Explain) prepareExplainInfo4DAGTask(p PhysicalPlan, taskType string) {
-	parents := p.Parents()
-	parentIDs := make([]string, 0, len(parents))
-	for _, parent := range parents {
-		parentIDs = append(parentIDs, parent.ExplainID())
-	}
-	childrenIDs := make([]string, 0, len(p.Children()))
-	for _, ch := range p.Children() {
-		childrenIDs = append(childrenIDs, ch.ExplainID())
-	}
-	parentInfo := strings.Join(parentIDs, ",")
-	childrenInfo := strings.Join(childrenIDs, ",")
-	operatorInfo := p.ExplainInfo()
-	count := p.statsProfile().count
-	row := types.MakeDatums(p.ExplainID(), parentInfo, childrenInfo, taskType, operatorInfo, count)
-	e.Rows = append(e.Rows, row)
-}
-
-// prepareCopTaskInfo generates explain information for cop-tasks.
-// Only PhysicalTableReader, PhysicalIndexReader and PhysicalIndexLookUpReader have cop-tasks currently.
-func (e *Explain) prepareCopTaskInfo(plans []PhysicalPlan) {
-	for _, p := range plans {
-		e.prepareExplainInfo4DAGTask(p, "cop")
-	}
-}
-
-// prepareRootTaskInfo generates explain information for root-tasks.
-func (e *Explain) prepareRootTaskInfo(p PhysicalPlan) {
-	e.explainedPlans[p.ID()] = true
-	for _, child := range p.Children() {
-		if e.explainedPlans[child.ID()] {
-			continue
-		}
-		e.prepareRootTaskInfo(child.(PhysicalPlan))
-	}
-	switch copPlan := p.(type) {
-	case *PhysicalTableReader:
-		e.prepareCopTaskInfo(copPlan.TablePlans)
-	case *PhysicalIndexReader:
-		e.prepareCopTaskInfo(copPlan.IndexPlans)
-	case *PhysicalIndexLookUpReader:
-		e.prepareCopTaskInfo(copPlan.IndexPlans)
-		e.prepareCopTaskInfo(copPlan.TablePlans)
-	}
-	e.prepareExplainInfo4DAGTask(p, "root")
-}
-
-func (e *Explain) prepareDotInfo(p PhysicalPlan) {
-	buffer := bytes.NewBufferString("")
-	buffer.WriteString(fmt.Sprintf("\ndigraph %s {\n", p.ExplainID()))
-	e.prepareTaskDot(p, "root", buffer)
-	buffer.WriteString(fmt.Sprintln("}"))
-
-	row := types.MakeDatums(buffer.String())
-	e.Rows = append(e.Rows, row)
-}
-
-func (e *Explain) prepareTaskDot(p PhysicalPlan, taskTp string, buffer *bytes.Buffer) {
-	buffer.WriteString(fmt.Sprintf("subgraph cluster%v{\n", p.ID()))
-	buffer.WriteString("node [style=filled, color=lightgrey]\n")
-	buffer.WriteString("color=black\n")
-	buffer.WriteString(fmt.Sprintf("label = \"%s\"\n", taskTp))
-
-	if len(p.Children()) == 0 {
-		buffer.WriteString(fmt.Sprintf("\"%s\"\n}\n", p.ExplainID()))
-		return
-	}
-
-	copTasks := []Plan{}
-	pipelines := []string{}
-
-	for planQueue := []Plan{p}; len(planQueue) > 0; planQueue = planQueue[1:] {
-		curPlan := planQueue[0]
-		switch copPlan := curPlan.(type) {
-		case *PhysicalTableReader:
-			pipelines = append(pipelines, fmt.Sprintf("\"%s\" -> \"%s\"\n", copPlan.ExplainID(), copPlan.tablePlan.ExplainID()))
-			copTasks = append(copTasks, copPlan.tablePlan)
-		case *PhysicalIndexReader:
-			pipelines = append(pipelines, fmt.Sprintf("\"%s\" -> \"%s\"\n", copPlan.ExplainID(), copPlan.indexPlan.ExplainID()))
-			copTasks = append(copTasks, copPlan.indexPlan)
-		case *PhysicalIndexLookUpReader:
-			pipelines = append(pipelines, fmt.Sprintf("\"%s\" -> \"%s\"\n", copPlan.ExplainID(), copPlan.tablePlan.ExplainID()))
-			pipelines = append(pipelines, fmt.Sprintf("\"%s\" -> \"%s\"\n", copPlan.ExplainID(), copPlan.indexPlan.ExplainID()))
-			copTasks = append(copTasks, copPlan.tablePlan)
-			copTasks = append(copTasks, copPlan.indexPlan)
-		}
-		for _, child := range curPlan.Children() {
-			buffer.WriteString(fmt.Sprintf("\"%s\" -> \"%s\"\n", curPlan.ExplainID(), child.ExplainID()))
-			planQueue = append(planQueue, child)
-		}
-	}
-	buffer.WriteString("}\n")
-
-	for _, cop := range copTasks {
-		e.prepareTaskDot(cop.(PhysicalPlan), "cop", buffer)
-	}
-
-	for i := range pipelines {
-		buffer.WriteString(pipelines[i])
-	}
+	StmtPlan Plan
 }

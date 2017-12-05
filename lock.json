@@ -1,10 +1,10 @@
 {
-    "memo": "58fc611f3d06a7474189b5347bd5dc4e89dc2fa36e94188b1f7461f326955342",
+    "memo": "a99f92e3939751658e0cbfc7934ddec4b1bedf6102b44251ac30291eb286cdf9",
     "projects": [
         {
             "name": "github.com/BurntSushi/toml",
-            "version": "v0.3.0",
-            "revision": "b26d9c308763d68093482582cea63d69be07a0f0",
+            "branch": "master",
+            "revision": "d94612f9fc140360834f9742158c70b5c5b5535b",
             "packages": [
                 "."
             ]
@@ -64,8 +64,8 @@
         },
         {
             "name": "github.com/pingcap/tidb",
-            "version": "v1.0.3",
-            "revision": "b8bcf9c3d68dc16e2d75a99212686130f895b748",
+            "branch": "master",
+            "revision": "1513adc986aff784959951ccbd5035b3f413006b",
             "packages": [
                 "_vendor/src/github.com/juju/errors"
             ]
@@ -80,8 +80,8 @@
         },
         {
             "name": "github.com/supme/directEmail",
-            "version": "0.2",
-            "revision": "ac5a15cab9ac3dab9b10612840f7f28736004af6",
+            "branch": "master",
+            "revision": "384a31d8ebd0f2448ea6a446d78af5b51db4a0c5",
             "packages": [
                 "."
             ]
@@ -89,7 +89,7 @@
         {
             "name": "github.com/toorop/go-dkim",
             "branch": "master",
-            "revision": "83672023c79e6b352bf9d4908e6c060c7a24323c",
+            "revision": "43c1bb05e85404d07a5020ad38c6b67b3a039b86",
             "packages": [
                 "."
             ]
@@ -115,7 +115,7 @@
         {
             "name": "golang.org/x/text",
             "branch": "master",
-            "revision": "57961680700a5336d15015c8c50686ca5ba362a4",
+            "revision": "88f656faf3f37f690df1a32515b479415e1a6769",
             "packages": [
                 "secure/bidirule",
                 "unicode/bidi",

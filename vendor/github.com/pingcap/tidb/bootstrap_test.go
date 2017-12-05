@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/tidb/parser"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/variable"
-	"github.com/pingcap/tidb/util/auth"
 	"github.com/pingcap/tidb/util/testleak"
 )
 
@@ -41,9 +40,7 @@ func (s *testBootstrapSuite) SetUpSuite(c *C) {
 
 func (s *testBootstrapSuite) TestBootstrap(c *C) {
 	defer testleak.AfterTest(c)()
-	store, dom := newStoreWithBootstrap(c, s.dbName)
-	defer dom.Close()
-	defer store.Close()
+	store := newStoreWithBootstrap(c, s.dbName)
 	se := newSession(c, store, s.dbName)
 	mustExecSQL(c, se, "USE mysql;")
 	r := mustExecSQL(c, se, `select * from user;`)
@@ -51,9 +48,9 @@ func (s *testBootstrapSuite) TestBootstrap(c *C) {
 	row, err := r.Next()
 	c.Assert(err, IsNil)
 	c.Assert(row, NotNil)
-	match(c, row.Data, []byte("%"), []byte("root"), []byte(""), "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y")
+	match(c, row.Data, []byte("%"), []byte("root"), []byte(""), "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y")
 
-	c.Assert(se.Auth(&auth.UserIdentity{Username: "root", Hostname: "anyhost"}, []byte(""), []byte("")), IsTrue)
+	c.Assert(se.Auth("root@anyhost", []byte(""), []byte("")), IsTrue)
 	mustExecSQL(c, se, "USE test;")
 	// Check privilege tables.
 	mustExecSQL(c, se, "SELECT * from mysql.db;")
@@ -108,14 +105,14 @@ func globalVarsCount() int64 {
 	return count
 }
 
-// bootstrapWithOnlyDDLWork creates a new session on store but only do ddl works.
+// Create a new session on store but only do ddl works.
 func (s *testBootstrapSuite) bootstrapWithOnlyDDLWork(store kv.Storage, c *C) {
 	ss := &session{
+		values:      make(map[fmt.Stringer]interface{}),
 		store:       store,
 		parser:      parser.New(),
 		sessionVars: variable.NewSessionVars(),
 	}
-	ss.mu.values = make(map[fmt.Stringer]interface{})
 	ss.SetValue(context.Initing, true)
 	domain, err := domap.Get(store)
 	c.Assert(err, IsNil)
@@ -129,7 +126,6 @@ func (s *testBootstrapSuite) bootstrapWithOnlyDDLWork(store kv.Storage, c *C) {
 	// Leave dml unfinished.
 }
 
-// testBootstrapWithError :
 // When a session failed in bootstrap process (for example, the session is killed after doDDLWorks()).
 // We should make sure that the following session could finish the bootstrap process.
 func (s *testBootstrapSuite) testBootstrapWithError(c *C) {
@@ -144,7 +140,7 @@ func (s *testBootstrapSuite) testBootstrapWithError(c *C) {
 	row, err := r.Next()
 	c.Assert(err, IsNil)
 	c.Assert(row, NotNil)
-	match(c, row.Data, []byte("%"), []byte("root"), []byte(""), "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y")
+	match(c, row.Data, []byte("%"), []byte("root"), []byte(""), "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y")
 	mustExecSQL(c, se, "USE test;")
 	// Check privilege tables.
 	mustExecSQL(c, se, "SELECT * from mysql.db;")
@@ -167,11 +163,10 @@ func (s *testBootstrapSuite) testBootstrapWithError(c *C) {
 	c.Assert(err, IsNil)
 }
 
-// TestUpgrade tests upgrading
+// Test case for upgrade
 func (s *testBootstrapSuite) TestUpgrade(c *C) {
 	defer testleak.AfterTest(c)()
-	store, _ := newStoreWithBootstrap(c, s.dbName)
-	defer store.Close()
+	store := newStoreWithBootstrap(c, s.dbName)
 	se := newSession(c, store, s.dbName)
 	mustExecSQL(c, se, "USE mysql;")
 
@@ -213,9 +208,7 @@ func (s *testBootstrapSuite) TestUpgrade(c *C) {
 	c.Assert(ver, Equals, int64(0))
 
 	// Create a new session then upgrade() will run automatically.
-	dom1, err := BootstrapSession(store)
-	c.Assert(err, IsNil)
-	defer dom1.Close()
+	BootstrapSession(store)
 	se2 := newSession(c, store, s.dbName)
 	r = mustExecSQL(c, se2, `SELECT VARIABLE_VALUE from mysql.TiDB where VARIABLE_NAME="tidb_server_version";`)
 	row, err = r.Next()
@@ -227,13 +220,4 @@ func (s *testBootstrapSuite) TestUpgrade(c *C) {
 	ver, err = getBootstrapVersion(se2)
 	c.Assert(err, IsNil)
 	c.Assert(ver, Equals, int64(currentBootstrapVersion))
-}
-
-func (s *testBootstrapSuite) TestOldPasswordUpgrade(c *C) {
-	defer testleak.AfterTest(c)()
-	pwd := "abc"
-	oldpwd := fmt.Sprintf("%X", auth.Sha1Hash([]byte(pwd)))
-	newpwd, err := oldPasswordUpgrade(oldpwd)
-	c.Assert(err, IsNil)
-	c.Assert(newpwd, Equals, "*0D3CED9BEC10A777AEC23CCC353A8C08A633045E")
 }

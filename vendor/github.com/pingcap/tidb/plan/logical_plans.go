@@ -17,31 +17,9 @@ import (
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/expression"
-	"github.com/pingcap/tidb/expression/aggregation"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/statistics"
+	"github.com/pingcap/tidb/plan/statistics"
 	"github.com/pingcap/tidb/util/types"
-)
-
-var (
-	_ LogicalPlan = &LogicalJoin{}
-	_ LogicalPlan = &LogicalAggregation{}
-	_ LogicalPlan = &Projection{}
-	_ LogicalPlan = &Selection{}
-	_ LogicalPlan = &LogicalApply{}
-	_ LogicalPlan = &Exists{}
-	_ LogicalPlan = &MaxOneRow{}
-	_ LogicalPlan = &TableDual{}
-	_ LogicalPlan = &DataSource{}
-	_ LogicalPlan = &Union{}
-	_ LogicalPlan = &Sort{}
-	_ LogicalPlan = &Update{}
-	_ LogicalPlan = &Delete{}
-	_ LogicalPlan = &SelectLock{}
-	_ LogicalPlan = &Limit{}
-	_ LogicalPlan = &Show{}
-	_ LogicalPlan = &Insert{}
 )
 
 // JoinType contains CrossJoin, InnerJoin, LeftOuterJoin, RightOuterJoin, FullOuterJoin, SemiJoin.
@@ -60,59 +38,27 @@ const (
 	LeftOuterSemiJoin
 )
 
-func (tp JoinType) String() string {
-	switch tp {
-	case InnerJoin:
-		return "inner join"
-	case LeftOuterJoin:
-		return "left outer join"
-	case RightOuterJoin:
-		return "right outer join"
-	case SemiJoin:
-		return "semi join"
-	case LeftOuterSemiJoin:
-		return "left outer semi join"
-	}
-	return "unsupported join type"
-}
-
-const (
-	preferLeftAsOuter = 1 << iota
-	preferRightAsOuter
-)
-
-// LogicalJoin is the logical join plan.
-type LogicalJoin struct {
-	*basePlan
+// Join is the logical join plan.
+type Join struct {
 	baseLogicalPlan
 
 	JoinType        JoinType
 	anti            bool
 	reordered       bool
 	cartesianJoin   bool
-	preferINLJ      int
 	preferMergeJoin bool
 
 	EqualConditions []*expression.ScalarFunction
-	LeftConditions  expression.CNFExprs
-	RightConditions expression.CNFExprs
-	OtherConditions expression.CNFExprs
-
-	LeftJoinKeys    []*expression.Column
-	RightJoinKeys   []*expression.Column
-	leftProperties  [][]*expression.Column
-	rightProperties [][]*expression.Column
+	LeftConditions  []expression.Expression
+	RightConditions []expression.Expression
+	OtherConditions []expression.Expression
 
 	// DefaultValues is only used for outer join, which stands for the default values when the outer table cannot find join partner
 	// instead of null padding.
 	DefaultValues []types.Datum
-
-	// redundantSchema contains columns which are eliminated in join.
-	// For select * from a join b using (c); a.c will in output schema, and b.c will in redundantSchema.
-	redundantSchema *expression.Schema
 }
 
-func (p *LogicalJoin) columnSubstitute(schema *expression.Schema, exprs []expression.Expression) {
+func (p *Join) columnSubstitute(schema *expression.Schema, exprs []expression.Expression) {
 	for i, fun := range p.EqualConditions {
 		p.EqualConditions[i] = expression.ColumnSubstitute(fun, schema, exprs).(*expression.ScalarFunction)
 	}
@@ -127,7 +73,7 @@ func (p *LogicalJoin) columnSubstitute(schema *expression.Schema, exprs []expres
 	}
 }
 
-func (p *LogicalJoin) attachOnConds(onConds []expression.Expression) {
+func (p *Join) attachOnConds(onConds []expression.Expression) {
 	eq, left, right, other := extractOnCondition(onConds, p.children[0].(LogicalPlan), p.children[1].(LogicalPlan))
 	p.EqualConditions = append(eq, p.EqualConditions...)
 	p.LeftConditions = append(left, p.LeftConditions...)
@@ -135,7 +81,7 @@ func (p *LogicalJoin) attachOnConds(onConds []expression.Expression) {
 	p.OtherConditions = append(other, p.OtherConditions...)
 }
 
-func (p *LogicalJoin) extractCorrelatedCols() []*expression.CorrelatedColumn {
+func (p *Join) extractCorrelatedCols() []*expression.CorrelatedColumn {
 	corCols := p.basePlan.extractCorrelatedCols()
 	for _, fun := range p.EqualConditions {
 		corCols = append(corCols, extractCorColumns(fun)...)
@@ -154,15 +100,8 @@ func (p *LogicalJoin) extractCorrelatedCols() []*expression.CorrelatedColumn {
 
 // Projection represents a select fields plan.
 type Projection struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
-
 	Exprs []expression.Expression
-
-	// calculateGenCols indicates the projection is for calculating generated columns.
-	// In *UPDATE*, we should know this to tell different projections.
-	calculateGenCols bool
 }
 
 func (p *Projection) extractCorrelatedCols() []*expression.CorrelatedColumn {
@@ -173,21 +112,18 @@ func (p *Projection) extractCorrelatedCols() []*expression.CorrelatedColumn {
 	return corCols
 }
 
-// LogicalAggregation represents an aggregate plan.
-type LogicalAggregation struct {
-	*basePlan
+// Aggregation represents an aggregate plan.
+type Aggregation struct {
 	baseLogicalPlan
 
-	AggFuncs     []aggregation.Aggregation
+	AggFuncs     []expression.AggregationFunction
 	GroupByItems []expression.Expression
+
 	// groupByCols stores the columns that are group-by items.
 	groupByCols []*expression.Column
-
-	possibleProperties [][]*expression.Column
-	inputCount         float64 // inputCount is the input count of this plan.
 }
 
-func (p *LogicalAggregation) extractCorrelatedCols() []*expression.CorrelatedColumn {
+func (p *Aggregation) extractCorrelatedCols() []*expression.CorrelatedColumn {
 	corCols := p.basePlan.extractCorrelatedCols()
 	for _, expr := range p.GroupByItems {
 		corCols = append(corCols, extractCorColumns(expr)...)
@@ -202,9 +138,7 @@ func (p *LogicalAggregation) extractCorrelatedCols() []*expression.CorrelatedCol
 
 // Selection means a filter.
 type Selection struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	// Originally the WHERE or ON condition is parsed into a single expression,
 	// but after we converted to CNF(Conjunctive normal form), it can be
@@ -213,14 +147,6 @@ type Selection struct {
 
 	// onTable means if this selection's child is a table scan or index scan.
 	onTable bool
-
-	// If ScanController is true, then the child of this selection is a scan,
-	// which use pk or index. we will record the accessConditions, idxConditions,
-	// and tblConditions to control the below plan.
-	ScanController bool
-
-	// We will check this at decorrelate phase.
-	controllerStatus int
 }
 
 func (p *Selection) extractCorrelatedCols() []*expression.CorrelatedColumn {
@@ -231,15 +157,15 @@ func (p *Selection) extractCorrelatedCols() []*expression.CorrelatedColumn {
 	return corCols
 }
 
-// LogicalApply gets one row from outer executor and gets one row from inner executor according to outer row.
-type LogicalApply struct {
-	LogicalJoin
+// Apply gets one row from outer executor and gets one row from inner executor according to outer row.
+type Apply struct {
+	Join
 
 	corCols []*expression.CorrelatedColumn
 }
 
-func (p *LogicalApply) extractCorrelatedCols() []*expression.CorrelatedColumn {
-	corCols := p.LogicalJoin.extractCorrelatedCols()
+func (p *Apply) extractCorrelatedCols() []*expression.CorrelatedColumn {
+	corCols := p.Join.extractCorrelatedCols()
 	for i := len(corCols) - 1; i >= 0; i-- {
 		if p.children[0].Schema().Contains(&corCols[i].Column) {
 			corCols = append(corCols[:i], corCols[i+1:]...)
@@ -250,30 +176,21 @@ func (p *LogicalApply) extractCorrelatedCols() []*expression.CorrelatedColumn {
 
 // Exists checks if a query returns result.
 type Exists struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 }
 
 // MaxOneRow checks if a query returns no more than one row.
 type MaxOneRow struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 }
 
 // TableDual represents a dual table plan.
 type TableDual struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
-
-	RowCount int
 }
 
 // DataSource represents a tablescan without condition push down.
 type DataSource struct {
-	*basePlan
 	baseLogicalPlan
 
 	indexHints []*ast.IndexHint
@@ -285,58 +202,20 @@ type DataSource struct {
 
 	LimitCount *int64
 
-	// pushedDownConds are the conditions that will be pushed down to coprocessor.
-	pushedDownConds []expression.Expression
-
 	statisticTable *statistics.Table
-
-	// NeedColHandle is used in execution phase.
-	NeedColHandle bool
-
-	// This is schema the PhysicalUnionScan should be.
-	unionScanSchema *expression.Schema
-}
-
-func (p *DataSource) getPKIsHandleCol() *expression.Column {
-	if !p.tableInfo.PKIsHandle {
-		return nil
-	}
-	for i, col := range p.Columns {
-		if mysql.HasPriKeyFlag(col.Flag) {
-			return p.schema.Columns[i]
-		}
-	}
-	return nil
-}
-
-// TableInfo returns the *TableInfo of data source.
-func (p *DataSource) TableInfo() *model.TableInfo {
-	return p.tableInfo
-}
-
-// Schema implements the plan interface.
-func (p *DataSource) Schema() *expression.Schema {
-	if p.unionScanSchema != nil {
-		return p.unionScanSchema
-	}
-	return p.schema
 }
 
 // Union represents Union plan.
 type Union struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 }
 
 // Sort stands for the order by plan.
 type Sort struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	ByItems   []*ByItems
-	ExecLimit *Limit // no longer be used by new plan
+	ExecLimit *Limit
 }
 
 func (p *Sort) extractCorrelatedCols() []*expression.CorrelatedColumn {
@@ -347,69 +226,28 @@ func (p *Sort) extractCorrelatedCols() []*expression.CorrelatedColumn {
 	return corCols
 }
 
-// TopN represents a top-n plan.
-type TopN struct {
-	*basePlan
-	baseLogicalPlan
-	basePhysicalPlan
-
-	ByItems []*ByItems
-	Offset  uint64
-	Count   uint64
-
-	// partial is true if this topn is generated by push-down optimization.
-	partial bool
-}
-
-// isLimit checks if TopN is a limit plan.
-func (t *TopN) isLimit() bool {
-	return len(t.ByItems) == 0
-}
-
-// Limit represents offset and limit plan.
-type Limit struct {
-	*basePlan
-	baseLogicalPlan
-	basePhysicalPlan
-
-	Offset uint64
-	Count  uint64
-
-	// partial is true if this topn is generated by push-down optimization.
-	partial bool
-
-	expectedProp *requiredProp
-}
-
 // Update represents Update plan.
 type Update struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	OrderedList []*expression.Assignment
-	IgnoreErr   bool
 }
 
 // Delete represents a delete plan.
 type Delete struct {
-	*basePlan
 	baseLogicalPlan
-	basePhysicalPlan
 
 	Tables       []*ast.TableName
 	IsMultiTable bool
 }
 
-// setParentAndChildren sets parent and children relationship.
-func setParentAndChildren(parent Plan, children ...Plan) {
-	if children == nil || parent == nil {
+// AddChild for parent.
+func addChild(parent Plan, child Plan) {
+	if child == nil || parent == nil {
 		return
 	}
-	for _, child := range children {
-		child.SetParents(parent)
-	}
-	parent.SetChildren(children...)
+	child.AddParent(parent)
+	parent.AddChild(child)
 }
 
 // InsertPlan means inserting plan between two plans.

@@ -16,10 +16,9 @@ package inspectkv
 import (
 	"io"
 	"reflect"
-	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/model"
@@ -35,6 +34,7 @@ import (
 type DDLInfo struct {
 	SchemaVer   int64
 	ReorgHandle int64 // it's only used for DDL information.
+	Owner       *model.Owner
 	Job         *model.Job
 }
 
@@ -44,6 +44,10 @@ func GetDDLInfo(txn kv.Transaction) (*DDLInfo, error) {
 	info := &DDLInfo{}
 	t := meta.NewMeta(txn)
 
+	info.Owner, err = t.GetDDLJobOwner()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	info.Job, err = t.GetDDLJob(0)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -64,95 +68,26 @@ func GetDDLInfo(txn kv.Transaction) (*DDLInfo, error) {
 	return info, nil
 }
 
-// CancelJobs cancels the DDL jobs.
-func CancelJobs(txn kv.Transaction, ids []int64) ([]error, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
+// GetBgDDLInfo returns background DDL information.
+func GetBgDDLInfo(txn kv.Transaction) (*DDLInfo, error) {
+	var err error
+	info := &DDLInfo{}
+	t := meta.NewMeta(txn)
 
-	jobs, err := GetDDLJobs(txn)
+	info.Owner, err = t.GetBgJobOwner()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	info.Job, err = t.GetBgJob(0)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	info.SchemaVer, err = t.GetSchemaVersion()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	errs := make([]error, len(ids))
-	t := meta.NewMeta(txn)
-	for i, id := range ids {
-		found := false
-		for j, job := range jobs {
-			if id != job.ID {
-				log.Debugf("the job ID %d that needs to be canceled isn't equal to current job ID %d", id, job.ID)
-				continue
-			}
-			found = true
-			// These states can't be cancelled.
-			if job.IsDone() || job.IsSynced() {
-				errs[i] = errors.New("This job is finished, so can't be cancelled")
-				continue
-			}
-			// If the state is rolling back, it means the work is cleaning the data after cancelling the job.
-			if job.IsCancelled() || job.IsRollingback() {
-				continue
-			}
-			job.State = model.JobCancelling
-			// Make sure RawArgs isn't overwritten.
-			err := job.DecodeArgs(job.RawArgs)
-			if err != nil {
-				errs[i] = errors.Trace(err)
-				continue
-			}
-			err = t.UpdateDDLJob(int64(j), job)
-			if err != nil {
-				errs[i] = errors.Trace(err)
-			}
-		}
-		if !found {
-			errs[i] = errors.New("Can't find this job")
-		}
-	}
-	return errs, nil
-}
-
-// GetDDLJobs returns the DDL jobs and an error.
-func GetDDLJobs(txn kv.Transaction) ([]*model.Job, error) {
-	t := meta.NewMeta(txn)
-	cnt, err := t.DDLJobQueueLen()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	jobs := make([]*model.Job, cnt)
-	for i := range jobs {
-		jobs[i], err = t.GetDDLJob(int64(i))
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
-	return jobs, nil
-}
-
-const maxHistoryJobs = 10
-
-// GetHistoryDDLJobs returns the DDL history jobs and an error.
-// The maximum count of history jobs is maxHistoryJobs.
-func GetHistoryDDLJobs(txn kv.Transaction) ([]*model.Job, error) {
-	t := meta.NewMeta(txn)
-	jobs, err := t.GetAllHistoryDDLJobs()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	jobsLen := len(jobs)
-	if jobsLen > maxHistoryJobs {
-		start := jobsLen - maxHistoryJobs
-		jobs = jobs[start:]
-	}
-	jobsLen = len(jobs)
-	ret := make([]*model.Job, 0, jobsLen)
-	for i := jobsLen - 1; i >= 0; i-- {
-		ret = append(ret, jobs[i])
-	}
-	return ret, nil
+	return info, nil
 }
 
 func nextIndexVals(data []types.Datum) []types.Datum {
@@ -258,7 +193,7 @@ func checkIndexAndRecord(txn kv.Transaction, t table.Table, idx table.Index) err
 		}
 
 		vals2, err := rowWithCols(txn, t, h, cols)
-		if kv.ErrNotExist.Equal(err) {
+		if terror.ErrorEqual(err, kv.ErrNotExist) {
 			record := &RecordData{Handle: h, Values: vals1}
 			err = errDateNotEqual.Gen("index:%v != record:%v", record, nil)
 		}
@@ -284,7 +219,7 @@ func checkRecordAndIndex(txn kv.Transaction, t table.Table, idx table.Index) err
 	startKey := t.RecordKey(0)
 	filterFunc := func(h1 int64, vals1 []types.Datum, cols []*table.Column) (bool, error) {
 		isExist, h2, err := idx.Exist(txn, vals1, h1)
-		if kv.ErrKeyExists.Equal(err) {
+		if terror.ErrorEqual(err, kv.ErrKeyExists) {
 			record1 := &RecordData{Handle: h1, Values: vals1}
 			record2 := &RecordData{Handle: h2, Values: vals1}
 			return false, errDateNotEqual.Gen("index:%v != record:%v", record2, record1)
@@ -469,7 +404,7 @@ func rowWithCols(txn kv.Retriever, t table.Table, h int64, cols []*table.Column)
 		}
 		colTps[col.ID] = &col.FieldType
 	}
-	row, err := tablecodec.DecodeRow(value, colTps, time.UTC)
+	row, err := tablecodec.DecodeRow(value, colTps)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -521,7 +456,7 @@ func iterRecords(retriever kv.Retriever, t table.Table, startKey kv.Key, cols []
 			return errors.Trace(err)
 		}
 
-		rowMap, err := tablecodec.DecodeRow(it.Value(), colMap, time.UTC)
+		rowMap, err := tablecodec.DecodeRow(it.Value(), colMap)
 		if err != nil {
 			return errors.Trace(err)
 		}

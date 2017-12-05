@@ -25,7 +25,7 @@ type testMyDecimalSuite struct {
 }
 
 func (s *testMyDecimalSuite) TestFromInt(c *C) {
-	tests := []struct {
+	cases := []struct {
 		input  int64
 		output string
 	}{
@@ -35,15 +35,15 @@ func (s *testMyDecimalSuite) TestFromInt(c *C) {
 		{-9223372036854775807, "-9223372036854775807"},
 		{-9223372036854775808, "-9223372036854775808"},
 	}
-	for _, tt := range tests {
-		dec := NewDecFromInt(tt.input)
+	for _, ca := range cases {
+		dec := NewDecFromInt(ca.input)
 		str := dec.ToString()
-		c.Check(string(str), Equals, tt.output)
+		c.Check(string(str), Equals, ca.output)
 	}
 }
 
 func (s *testMyDecimalSuite) TestFromUint(c *C) {
-	tests := []struct {
+	cases := []struct {
 		input  uint64
 		output string
 	}{
@@ -51,16 +51,16 @@ func (s *testMyDecimalSuite) TestFromUint(c *C) {
 		{0, "0"},
 		{18446744073709551615, "18446744073709551615"},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
-		dec.FromUint(tt.input)
+		dec.FromUint(ca.input)
 		str := dec.ToString()
-		c.Check(string(str), Equals, tt.output)
+		c.Check(string(str), Equals, ca.output)
 	}
 }
 
 func (s *testMyDecimalSuite) TestToInt(c *C) {
-	tests := []struct {
+	cases := []struct {
 		input  string
 		output int64
 		err    error
@@ -74,17 +74,17 @@ func (s *testMyDecimalSuite) TestToInt(c *C) {
 		{"9223372036854775808", 9223372036854775807, ErrOverflow},
 		{"-9223372036854775809", -9223372036854775808, ErrOverflow},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
-		dec.FromString([]byte(tt.input))
+		dec.FromString([]byte(ca.input))
 		result, ec := dec.ToInt()
-		c.Check(ec, Equals, tt.err)
-		c.Check(result, Equals, tt.output)
+		c.Check(ec, Equals, ca.err)
+		c.Check(result, Equals, ca.output)
 	}
 }
 
 func (s *testMyDecimalSuite) TestToUint(c *C) {
-	tests := []struct {
+	cases := []struct {
 		input  string
 		output uint64
 		err    error
@@ -98,17 +98,17 @@ func (s *testMyDecimalSuite) TestToUint(c *C) {
 		{"1.23", 1, ErrTruncated},
 		{"9999999999999999999999999.000", 18446744073709551615, ErrOverflow},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
-		dec.FromString([]byte(tt.input))
+		dec.FromString([]byte(ca.input))
 		result, ec := dec.ToUint()
-		c.Check(ec, Equals, tt.err)
-		c.Check(result, Equals, tt.output)
+		c.Check(ec, Equals, ca.err)
+		c.Check(result, Equals, ca.output)
 	}
 }
 
 func (s *testMyDecimalSuite) TestFromFloat(c *C) {
-	tests := []struct {
+	cases := []struct {
 		s string
 		f float64
 	}{
@@ -118,15 +118,15 @@ func (s *testMyDecimalSuite) TestFromFloat(c *C) {
 		{"0.00012345000098765", 0.00012345000098765},
 		{"1234500009876.5", 1234500009876.5},
 	}
-	for _, tt := range tests {
-		dec := NewDecFromFloatForTest(tt.f)
+	for _, ca := range cases {
+		dec := NewDecFromFloatForTest(ca.f)
 		str := dec.ToString()
-		c.Check(string(str), Equals, tt.s)
+		c.Check(string(str), Equals, ca.s)
 	}
 }
 
 func (s *testMyDecimalSuite) TestToFloat(c *C) {
-	tests := []struct {
+	cases := []struct {
 		s string
 		f float64
 	}{
@@ -136,7 +136,7 @@ func (s *testMyDecimalSuite) TestToFloat(c *C) {
 		{"0.00012345000098765", 0.00012345000098765},
 		{"1234500009876.5", 1234500009876.5},
 	}
-	for _, ca := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
 		dec.FromString([]byte(ca.s))
 		f, err := dec.ToFloat64()
@@ -152,8 +152,8 @@ func (s *testMyDecimalSuite) TestShift(c *C) {
 		output string
 		err    error
 	}
-	var dotest = func(c *C, tests []tcase) {
-		for _, ca := range tests {
+	var dotest = func(c *C, cases []tcase) {
+		for _, ca := range cases {
 			var dec MyDecimal
 			err := dec.FromString([]byte(ca.input))
 			c.Check(err, IsNil)
@@ -165,7 +165,7 @@ func (s *testMyDecimalSuite) TestShift(c *C) {
 		}
 	}
 	wordBufLen = maxWordBufLen
-	tests := []tcase{
+	cases := []tcase{
 		{"123.123", 1, "1231.23", nil},
 		{"123457189.123123456789000", 1, "1234571891.23123456789", nil},
 		{"123457189.123123456789000", 8, "12345718912312345.6789", nil},
@@ -202,9 +202,9 @@ func (s *testMyDecimalSuite) TestShift(c *C) {
 		{"123987654321.123456789000", -14, "0.00123987654321123456789", nil},
 		{"00000087654321.123456789000", -14, "0.00000087654321123456789", nil},
 	}
-	dotest(c, tests)
+	dotest(c, cases)
 	wordBufLen = 2
-	tests = []tcase{
+	cases = []tcase{
 		{"123.123", -2, "1.23123", nil},
 		{"123.123", -3, "0.123123", nil},
 		{"123.123", -6, "0.000123123", nil},
@@ -255,17 +255,29 @@ func (s *testMyDecimalSuite) TestShift(c *C) {
 		{"123456789.987654321", 10, "123456789.987654321", ErrOverflow},
 		{"123456789.987654321", 0, "123456789.987654321", nil},
 	}
-	dotest(c, tests)
+	dotest(c, cases)
 	wordBufLen = maxWordBufLen
 }
 
-func (s *testMyDecimalSuite) TestRoundWithHalfEven(c *C) {
-	tests := []struct {
+func (s *testMyDecimalSuite) TestRound(c *C) {
+	type tcase struct {
 		input  string
 		scale  int
 		output string
 		err    error
-	}{
+	}
+	var doTest = func(c *C, cases []tcase) {
+		for _, ca := range cases {
+			var dec MyDecimal
+			dec.FromString([]byte(ca.input))
+			var rounded MyDecimal
+			err := dec.Round(&rounded, ca.scale)
+			c.Check(err, Equals, ca.err)
+			result := rounded.ToString()
+			c.Check(string(result), Equals, ca.output)
+		}
+	}
+	cases := []tcase{
 		{"123456789.987654321", 1, "123456790.0", nil},
 		{"15.1", 0, "15", nil},
 		{"15.5", 0, "16", nil},
@@ -282,85 +294,7 @@ func (s *testMyDecimalSuite) TestRoundWithHalfEven(c *C) {
 		{".999", 0, "1", nil},
 		{"999999999", -9, "1000000000", nil},
 	}
-
-	for _, ca := range tests {
-		var dec MyDecimal
-		dec.FromString([]byte(ca.input))
-		var rounded MyDecimal
-		err := dec.Round(&rounded, ca.scale, ModeHalfEven)
-		c.Check(err, Equals, ca.err)
-		result := rounded.ToString()
-		c.Check(string(result), Equals, ca.output)
-	}
-}
-
-func (s *testMyDecimalSuite) TestRoundWithTruncate(c *C) {
-	tests := []struct {
-		input  string
-		scale  int
-		output string
-		err    error
-	}{
-		{"123456789.987654321", 1, "123456789.9", nil},
-		{"15.1", 0, "15", nil},
-		{"15.5", 0, "15", nil},
-		{"15.9", 0, "15", nil},
-		{"-15.1", 0, "-15", nil},
-		{"-15.5", 0, "-15", nil},
-		{"-15.9", 0, "-15", nil},
-		{"15.1", 1, "15.1", nil},
-		{"-15.1", 1, "-15.1", nil},
-		{"15.17", 1, "15.1", nil},
-		{"15.4", -1, "10", nil},
-		{"-15.4", -1, "-10", nil},
-		{"5.4", -1, "0", nil},
-		{".999", 0, "0", nil},
-		{"999999999", -9, "0", nil},
-	}
-	for _, ca := range tests {
-		var dec MyDecimal
-		dec.FromString([]byte(ca.input))
-		var rounded MyDecimal
-		err := dec.Round(&rounded, ca.scale, ModeTruncate)
-		c.Check(err, Equals, ca.err)
-		result := rounded.ToString()
-		c.Check(string(result), Equals, ca.output)
-	}
-}
-
-func (s *testMyDecimalSuite) TestRoundWithCeil(c *C) {
-	tests := []struct {
-		input  string
-		scale  int
-		output string
-		err    error
-	}{
-		{"123456789.987654321", 1, "123456790.0", nil},
-		{"15.1", 0, "16", nil},
-		{"15.5", 0, "16", nil},
-		{"15.9", 0, "16", nil},
-		//TODO:fix me
-		{"-15.1", 0, "-16", nil},
-		{"-15.5", 0, "-16", nil},
-		{"-15.9", 0, "-16", nil},
-		{"15.1", 1, "15.1", nil},
-		{"-15.1", 1, "-15.1", nil},
-		{"15.17", 1, "15.2", nil},
-		{"15.4", -1, "20", nil},
-		{"-15.4", -1, "-20", nil},
-		{"5.4", -1, "10", nil},
-		{".999", 0, "1", nil},
-		{"999999999", -9, "1000000000", nil},
-	}
-	for _, ca := range tests {
-		var dec MyDecimal
-		dec.FromString([]byte(ca.input))
-		var rounded MyDecimal
-		err := dec.Round(&rounded, ca.scale, modeCeiling)
-		c.Check(err, Equals, ca.err)
-		result := rounded.ToString()
-		c.Check(string(result), Equals, ca.output)
-	}
+	doTest(c, cases)
 }
 
 func (s *testMyDecimalSuite) TestFromString(c *C) {
@@ -369,7 +303,7 @@ func (s *testMyDecimalSuite) TestFromString(c *C) {
 		output string
 		err    error
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"12345", "12345", nil},
 		{"12345.", "12345", nil},
 		{"123.45.", "123.45", nil},
@@ -381,7 +315,7 @@ func (s *testMyDecimalSuite) TestFromString(c *C) {
 		{"123E5", "12300000", nil},
 		{"123E-2", "1.23", nil},
 	}
-	for _, ca := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
 		err := dec.FromString([]byte(ca.input))
 		c.Check(err, Equals, ca.err)
@@ -390,11 +324,11 @@ func (s *testMyDecimalSuite) TestFromString(c *C) {
 		c.Check(string(result), Equals, ca.output, Commentf("dec:%s", dec.String()))
 	}
 	wordBufLen = 1
-	tests = []tcase{
+	cases = []tcase{
 		{"123450000098765", "98765", ErrOverflow},
 		{"123450.000098765", "123450", ErrTruncated},
 	}
-	for _, ca := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
 		err := dec.FromString([]byte(ca.input))
 		c.Check(err, Equals, ca.err)
@@ -409,12 +343,12 @@ func (s *testMyDecimalSuite) TestToString(c *C) {
 		input  string
 		output string
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"123.123", "123.123"},
 		{"123.1230", "123.1230"},
 		{"00123.123", "123.123"},
 	}
-	for _, ca := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
 		dec.FromString([]byte(ca.input))
 		result := dec.ToString()
@@ -430,7 +364,7 @@ func (s *testMyDecimalSuite) TestToBinFromBin(c *C) {
 		output    string
 		err       error
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"-10.55", 4, 2, "-10.55", nil},
 		{"0.0123456789012345678912345", 30, 25, "0.0123456789012345678912345", nil},
 		{"12345", 5, 0, "12345", nil},
@@ -447,7 +381,7 @@ func (s *testMyDecimalSuite) TestToBinFromBin(c *C) {
 		{"123.4", 10, 2, "123.40", nil},
 		{"1000", 3, 0, "0", ErrOverflow},
 	}
-	for _, ca := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
 		err := dec.FromString([]byte(ca.input))
 		c.Assert(err, IsNil)
@@ -461,7 +395,7 @@ func (s *testMyDecimalSuite) TestToBinFromBin(c *C) {
 	}
 	var dec MyDecimal
 	dec.FromInt(1)
-	errTests := []struct {
+	errCases := []struct {
 		prec int
 		frac int
 	}{
@@ -470,8 +404,8 @@ func (s *testMyDecimalSuite) TestToBinFromBin(c *C) {
 		{10, 31},
 		{10, -1},
 	}
-	for _, tt := range errTests {
-		_, err := dec.ToBin(tt.prec, tt.frac)
+	for _, ca := range errCases {
+		_, err := dec.ToBin(ca.prec, ca.frac)
 		c.Assert(ErrBadNumber.Equal(err), IsTrue)
 	}
 }
@@ -482,7 +416,7 @@ func (s *testMyDecimalSuite) TestCompare(c *C) {
 		b   string
 		cmp int
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"12", "13", -1},
 		{"13", "12", 1},
 		{"-10", "10", -1},
@@ -495,11 +429,11 @@ func (s *testMyDecimalSuite) TestCompare(c *C) {
 		{"1.2", "1.1", 1},
 		{"1.1", "1.2", -1},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
-		c.Assert(a.Compare(&b), Equals, tt.cmp)
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
+		c.Assert(a.Compare(&b), Equals, ca.cmp)
 	}
 }
 
@@ -509,7 +443,7 @@ func (s *testMyDecimalSuite) TestMaxDecimal(c *C) {
 		frac   int
 		result string
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{1, 1, "0.9"},
 		{1, 0, "9"},
 		{2, 1, "9.9"},
@@ -526,22 +460,22 @@ func (s *testMyDecimalSuite) TestMaxDecimal(c *C) {
 		{20, 0, "99999999999999999999"},
 		{40, 20, "99999999999999999999.99999999999999999999"},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var dec MyDecimal
-		maxDecimal(tt.prec, tt.frac, &dec)
+		maxDecimal(ca.prec, ca.frac, &dec)
 		str := dec.ToString()
-		c.Assert(string(str), Equals, tt.result)
+		c.Assert(string(str), Equals, ca.result)
 	}
 }
 
 func (s *testMyDecimalSuite) TestAdd(c *C) {
-	type testCase struct {
+	type tcase struct {
 		a      string
 		b      string
 		result string
 		err    error
 	}
-	tests := []testCase{
+	cases := []tcase{
 		{".00012345000098765", "123.45", "123.45012345000098765", nil},
 		{".1", ".45", "0.55", nil},
 		{"1234500009876.5", ".00012345000098765", "1234500009876.50012345000098765", nil},
@@ -558,14 +492,14 @@ func (s *testMyDecimalSuite) TestAdd(c *C) {
 		{"5", "-6.0", "-1.0", nil},
 		{"2" + strings.Repeat("1", 71), strings.Repeat("8", 81), "8888888890" + strings.Repeat("9", 71), nil},
 	}
-	for _, tt := range tests {
-		a := NewDecFromStringForTest(tt.a)
-		b := NewDecFromStringForTest(tt.b)
+	for _, ca := range cases {
+		a := NewDecFromStringForTest(ca.a)
+		b := NewDecFromStringForTest(ca.b)
 		var sum MyDecimal
 		err := DecimalAdd(a, b, &sum)
-		c.Assert(err, Equals, tt.err)
+		c.Assert(err, Equals, ca.err)
 		result := sum.ToString()
-		c.Assert(string(result), Equals, tt.result)
+		c.Assert(string(result), Equals, ca.result)
 	}
 }
 
@@ -576,7 +510,7 @@ func (s *testMyDecimalSuite) TestSub(c *C) {
 		result string
 		err    error
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{".00012345000098765", "123.45", "-123.44987654999901235", nil},
 		{"1234500009876.5", ".00012345000098765", "1234500009876.49987654999901235", nil},
 		{"9999900000000.5", ".555", "9999899999999.945", nil},
@@ -592,14 +526,14 @@ func (s *testMyDecimalSuite) TestSub(c *C) {
 		{"-12345", "123.45", "-12468.45", nil},
 		{"12345", "-123.45", "12468.45", nil},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, sum MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		err := DecimalSub(&a, &b, &sum)
-		c.Assert(err, Equals, tt.err)
+		c.Assert(err, Equals, ca.err)
 		result := sum.ToString()
-		c.Assert(string(result), Equals, tt.result)
+		c.Assert(string(result), Equals, ca.result)
 	}
 }
 
@@ -610,7 +544,7 @@ func (s *testMyDecimalSuite) TestMul(c *C) {
 		result string
 		err    error
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"12", "10", "120", nil},
 		{"-123.456", "98765.4321", "-12193185.1853376", nil},
 		{"-123456000000", "98765432100000", "-12193185185337600000000000", nil},
@@ -620,14 +554,14 @@ func (s *testMyDecimalSuite) TestMul(c *C) {
 		{"123", "0", "0", nil},
 		{"1" + strings.Repeat("0", 60), "1" + strings.Repeat("0", 60), "0", ErrOverflow},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, product MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		err := DecimalMul(&a, &b, &product)
-		c.Check(err, Equals, tt.err)
+		c.Check(err, Equals, ca.err)
 		result := product.ToString()
-		c.Assert(string(result), Equals, tt.result)
+		c.Assert(string(result), Equals, ca.result)
 	}
 }
 
@@ -638,7 +572,7 @@ func (s *testMyDecimalSuite) TestDivMod(c *C) {
 		result string
 		err    error
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{"120", "10", "12.000000000", nil},
 		{"123", "0.01", "12300.000000000", nil},
 		{"120", "100000000000.00000", "0.000000001200000000", nil},
@@ -654,72 +588,72 @@ func (s *testMyDecimalSuite) TestDivMod(c *C) {
 		{"10.333000000", "12.34500", "0.837019036046982584042122316", nil},
 		{"10.000000000060", "2", "5.000000000030000000", nil},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, to MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		err := doDivMod(&a, &b, &to, nil, 5)
-		c.Check(err, Equals, tt.err)
-		if tt.err == ErrDivByZero {
+		c.Check(err, Equals, ca.err)
+		if ca.err == ErrDivByZero {
 			continue
 		}
 		result := to.ToString()
-		c.Assert(string(result), Equals, tt.result)
+		c.Assert(string(result), Equals, ca.result)
 	}
 
-	tests = []tcase{
+	cases = []tcase{
 		{"234", "10", "4", nil},
 		{"234.567", "10.555", "2.357", nil},
 		{"-234.567", "10.555", "-2.357", nil},
 		{"234.567", "-10.555", "2.357", nil},
 		{"99999999999999999999999999999999999999", "3", "0", nil},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, to MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		ec := doDivMod(&a, &b, nil, &to, 0)
-		c.Check(ec, Equals, tt.err)
-		if tt.err == ErrDivByZero {
+		c.Check(ec, Equals, ca.err)
+		if ca.err == ErrDivByZero {
 			continue
 		}
 		result := to.ToString()
-		c.Assert(string(result), Equals, tt.result)
+		c.Assert(string(result), Equals, ca.result)
 	}
 
-	tests = []tcase{
+	cases = []tcase{
 		{"1", "1", "1.0000", nil},
 		{"1.00", "1", "1.000000", nil},
 		{"1", "1.000", "1.0000", nil},
 		{"2", "3", "0.6667", nil},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, to MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		ec := DecimalDiv(&a, &b, &to, DivFracIncr)
-		c.Check(ec, Equals, tt.err)
-		if tt.err == ErrDivByZero {
+		c.Check(ec, Equals, ca.err)
+		if ca.err == ErrDivByZero {
 			continue
 		}
-		c.Assert(to.String(), Equals, tt.result)
+		c.Assert(to.String(), Equals, ca.result)
 	}
 
-	tests = []tcase{
+	cases = []tcase{
 		{"1", "2.0", "1.0", nil},
 		{"1.0", "2", "1.0", nil},
 		{"2.23", "3", "2.23", nil},
 	}
-	for _, tt := range tests {
+	for _, ca := range cases {
 		var a, b, to MyDecimal
-		a.FromString([]byte(tt.a))
-		b.FromString([]byte(tt.b))
+		a.FromString([]byte(ca.a))
+		b.FromString([]byte(ca.b))
 		ec := DecimalMod(&a, &b, &to)
-		c.Check(ec, Equals, tt.err)
-		if tt.err == ErrDivByZero {
+		c.Check(ec, Equals, ca.err)
+		if ca.err == ErrDivByZero {
 			continue
 		}
-		c.Assert(to.String(), Equals, tt.result)
+		c.Assert(to.String(), Equals, ca.result)
 	}
 }
 
@@ -730,15 +664,15 @@ func (s *testMyDecimalSuite) TestMaxOrMin(c *C) {
 		frac   int
 		result string
 	}
-	tests := []tcase{
+	cases := []tcase{
 		{true, 2, 1, "-9.9"},
 		{false, 1, 1, "0.9"},
 		{true, 1, 0, "-9"},
 		{false, 0, 0, "0"},
 		{false, 4, 2, "99.99"},
 	}
-	for _, tt := range tests {
-		dec := NewMaxOrMinDec(tt.neg, tt.prec, tt.frac)
-		c.Assert(dec.String(), Equals, tt.result)
+	for _, ca := range cases {
+		dec := NewMaxOrMinDec(ca.neg, ca.prec, ca.frac)
+		c.Assert(dec.String(), Equals, ca.result)
 	}
 }

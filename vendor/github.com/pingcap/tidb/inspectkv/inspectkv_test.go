@@ -16,7 +16,6 @@ package inspectkv
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
@@ -124,7 +123,7 @@ func (s *testSuite) TearDownSuite(c *C) {
 	c.Assert(err, IsNil)
 	t := meta.NewMeta(txn)
 
-	err = t.DropTable(s.dbInfo.ID, s.tbInfo.ID, true)
+	err = t.DropTable(s.dbInfo.ID, s.tbInfo.ID)
 	c.Assert(err, IsNil)
 	err = t.DropDatabase(s.dbInfo.ID)
 	c.Assert(err, IsNil)
@@ -141,6 +140,9 @@ func (s *testSuite) TestGetDDLInfo(c *C) {
 	c.Assert(err, IsNil)
 	t := meta.NewMeta(txn)
 
+	owner := &model.Owner{OwnerID: "owner"}
+	err = t.SetDDLJobOwner(owner)
+	c.Assert(err, IsNil)
 	dbInfo2 := &model.DBInfo{
 		ID:    2,
 		Name:  model.NewCIStr("b"),
@@ -155,121 +157,35 @@ func (s *testSuite) TestGetDDLInfo(c *C) {
 	c.Assert(err, IsNil)
 	info, err := GetDDLInfo(txn)
 	c.Assert(err, IsNil)
+	c.Assert(info.Owner, DeepEquals, owner)
 	c.Assert(info.Job, DeepEquals, job)
 	c.Assert(info.ReorgHandle, Equals, int64(0))
-	err = txn.Rollback()
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
-func (s *testSuite) TestGetDDLJobs(c *C) {
+func (s *testSuite) TestGetBgDDLInfo(c *C) {
 	defer testleak.AfterTest(c)()
-
 	txn, err := s.store.Begin()
 	c.Assert(err, IsNil)
 	t := meta.NewMeta(txn)
-	cnt := 10
-	jobs := make([]*model.Job, cnt)
-	for i := 0; i < cnt; i++ {
-		jobs[i] = &model.Job{
-			ID:       int64(i),
-			SchemaID: 1,
-			Type:     model.ActionCreateTable,
-		}
-		err = t.EnQueueDDLJob(jobs[i])
-		c.Assert(err, IsNil)
-		currJobs, err1 := GetDDLJobs(txn)
-		c.Assert(err1, IsNil)
-		c.Assert(currJobs, HasLen, i+1)
+
+	owner := &model.Owner{OwnerID: "owner"}
+	err = t.SetBgJobOwner(owner)
+	c.Assert(err, IsNil)
+	job := &model.Job{
+		SchemaID: 1,
+		Type:     model.ActionDropTable,
+		RowCount: 0,
 	}
-
-	currJobs, err := GetDDLJobs(txn)
+	err = t.EnQueueBgJob(job)
 	c.Assert(err, IsNil)
-	for i, job := range jobs {
-		c.Assert(job.ID, Equals, currJobs[i].ID)
-		c.Assert(job.SchemaID, Equals, int64(1))
-		c.Assert(job.Type, Equals, model.ActionCreateTable)
-	}
-
-	err = txn.Rollback()
+	info, err := GetBgDDLInfo(txn)
 	c.Assert(err, IsNil)
-}
-
-func (s *testSuite) TestCancelJobs(c *C) {
-	defer testleak.AfterTest(c)()
-
-	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
-	t := meta.NewMeta(txn)
-	cnt := 10
-	ids := make([]int64, cnt)
-	for i := 0; i < cnt; i++ {
-		job := &model.Job{
-			ID:       int64(i),
-			SchemaID: 1,
-			Type:     model.ActionCreateTable,
-		}
-		if i == 0 {
-			job.State = model.JobDone
-		}
-		if i == 1 {
-			job.State = model.JobCancelled
-		}
-		ids[i] = int64(i)
-		err = t.EnQueueDDLJob(job)
-		c.Assert(err, IsNil)
-	}
-
-	errs, err := CancelJobs(txn, ids)
-	c.Assert(err, IsNil)
-	for i, err := range errs {
-		if i == 0 {
-			c.Assert(err, NotNil)
-			continue
-		}
-		c.Assert(err, IsNil)
-	}
-
-	err = txn.Rollback()
-	c.Assert(err, IsNil)
-}
-
-func (s *testSuite) TestGetHistoryDDLJobs(c *C) {
-	defer testleak.AfterTest(c)()
-
-	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
-	t := meta.NewMeta(txn)
-	cnt := 11
-	jobs := make([]*model.Job, cnt)
-	for i := 0; i < cnt; i++ {
-		jobs[i] = &model.Job{
-			ID:       int64(i),
-			SchemaID: 1,
-			Type:     model.ActionCreateTable,
-		}
-		err = t.AddHistoryDDLJob(jobs[i])
-		c.Assert(err, IsNil)
-		historyJobs, err1 := GetHistoryDDLJobs(txn)
-		c.Assert(err1, IsNil)
-		if i+1 > maxHistoryJobs {
-			c.Assert(historyJobs, HasLen, maxHistoryJobs)
-		} else {
-			c.Assert(historyJobs, HasLen, i+1)
-		}
-	}
-
-	delta := cnt - maxHistoryJobs
-	historyJobs, err := GetHistoryDDLJobs(txn)
-	c.Assert(err, IsNil)
-	c.Assert(historyJobs, HasLen, maxHistoryJobs)
-	l := len(historyJobs) - 1
-	for i, job := range historyJobs {
-		c.Assert(job.ID, Equals, jobs[delta+l-i].ID)
-		c.Assert(job.SchemaID, Equals, int64(1))
-		c.Assert(job.Type, Equals, model.ActionCreateTable)
-	}
-
-	err = txn.Rollback()
+	c.Assert(info.Owner, DeepEquals, owner)
+	c.Assert(info.Job, DeepEquals, job)
+	c.Assert(info.ReorgHandle, Equals, int64(0))
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
@@ -280,7 +196,7 @@ func (s *testSuite) TestScan(c *C) {
 	c.Assert(err, IsNil)
 	indices := tb.Indices()
 	c.Assert(s.ctx.NewTxn(), IsNil)
-	_, err = tb.AddRecord(s.ctx, types.MakeDatums(1, 10, 11), false)
+	_, err = tb.AddRecord(s.ctx, types.MakeDatums(1, 10, 11))
 	c.Assert(err, IsNil)
 	c.Assert(s.ctx.Txn().Commit(), IsNil)
 
@@ -293,7 +209,7 @@ func (s *testSuite) TestScan(c *C) {
 	c.Assert(records, DeepEquals, []*RecordData{record1})
 
 	c.Assert(s.ctx.NewTxn(), IsNil)
-	_, err = tb.AddRecord(s.ctx, record2.Values, false)
+	_, err = tb.AddRecord(s.ctx, record2.Values)
 	c.Assert(err, IsNil)
 	c.Assert(s.ctx.Txn().Commit(), IsNil)
 	txn, err := s.store.Begin()
@@ -498,7 +414,7 @@ func (s *testSuite) testIndex(c *C, tb table.Table, idx table.Index) {
 func setColValue(c *C, txn kv.Transaction, key kv.Key, v types.Datum) {
 	row := []types.Datum{v, {}}
 	colIDs := []int64{2, 3}
-	value, err := tablecodec.EncodeRow(row, colIDs, time.UTC)
+	value, err := tablecodec.EncodeRow(row, colIDs)
 	c.Assert(err, IsNil)
 	err = txn.Set(key, value)
 	c.Assert(err, IsNil)

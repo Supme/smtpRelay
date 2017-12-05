@@ -19,7 +19,8 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/store/tikv"
+	"github.com/pingcap/tidb/store/localstore"
+	"github.com/pingcap/tidb/store/localstore/goleveldb"
 	"github.com/pingcap/tidb/table/tables"
 	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/testleak"
@@ -33,8 +34,9 @@ type testIndexSuite struct {
 }
 
 func (s *testIndexSuite) SetUpSuite(c *C) {
-	testleak.BeforeTest()
-	store, err := tikv.NewMockTikvStore()
+	path := "memory:"
+	d := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
+	store, err := d.Open(path)
 	c.Assert(err, IsNil)
 	s.s = store
 }
@@ -42,10 +44,10 @@ func (s *testIndexSuite) SetUpSuite(c *C) {
 func (s *testIndexSuite) TearDownSuite(c *C) {
 	err := s.s.Close()
 	c.Assert(err, IsNil)
-	testleak.AfterTest(c)()
 }
 
 func (s *testIndexSuite) TestIndex(c *C) {
+	defer testleak.AfterTest(c)()
 	tblInfo := &model.TableInfo{
 		ID: 1,
 		Indices: []*model.IndexInfo{
@@ -155,17 +157,6 @@ func (s *testIndexSuite) TestIndex(c *C) {
 	_, err = index.Create(txn, values, 2)
 	c.Assert(err, NotNil)
 
-	it, err = index.SeekFirst(txn)
-	c.Assert(err, IsNil)
-
-	getValues, h, err = it.Next()
-	c.Assert(err, IsNil)
-	c.Assert(getValues, HasLen, 2)
-	c.Assert(getValues[0].GetInt64(), Equals, int64(1))
-	c.Assert(getValues[1].GetInt64(), Equals, int64(2))
-	c.Assert(h, Equals, int64(1))
-	it.Close()
-
 	exist, h, err = index.Exist(txn, values, 1)
 	c.Assert(err, IsNil)
 	c.Assert(h, Equals, int64(1))
@@ -184,6 +175,7 @@ func (s *testIndexSuite) TestIndex(c *C) {
 }
 
 func (s *testIndexSuite) TestCombineIndexSeek(c *C) {
+	defer testleak.AfterTest(c)()
 	tblInfo := &model.TableInfo{
 		ID: 1,
 		Indices: []*model.IndexInfo{

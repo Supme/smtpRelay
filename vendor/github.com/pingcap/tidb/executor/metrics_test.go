@@ -14,8 +14,6 @@
 package executor_test
 
 import (
-	"fmt"
-
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/executor"
 	"github.com/pingcap/tidb/parser"
@@ -27,13 +25,7 @@ func (s *testSuite) TestStmtLabel(c *C) {
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("create table label (c1 int primary key, c2 int, c3 int, index (c2))")
-	for i := 0; i < 10; i++ {
-		sql := fmt.Sprintf("insert into label values (%d, %d, %d)", i, i, i)
-		tk.MustExec(sql)
-	}
-	tk.MustExec("analyze table label")
-
-	tests := []struct {
+	cases := []struct {
 		sql   string
 		label string
 	}{
@@ -55,14 +47,13 @@ func (s *testSuite) TestStmtLabel(c *C) {
 		{"update label set c3 = 3 where c2 = 1", "UpdateIndexRange"},
 		{"update label set c3 = 3 where c2 = 1 order by c3 limit 1", "UpdateIndexRangeOrderLimit"},
 	}
-	var ignore bool
-	for _, tt := range tests {
-		stmtNode, err := parser.New().ParseOneStmt(tt.sql, "", "")
+	for _, ca := range cases {
+		stmtNode, err := parser.New().ParseOneStmt(ca.sql, "", "")
 		c.Check(err, IsNil)
 		is := executor.GetInfoSchema(tk.Se)
 		c.Assert(plan.Preprocess(stmtNode, is, tk.Se), IsNil)
 		p, err := plan.Optimize(tk.Se, stmtNode, is)
 		c.Assert(err, IsNil)
-		c.Assert(executor.StatementLabel(stmtNode, p, &ignore), Equals, tt.label)
+		c.Assert(executor.StatementLabel(stmtNode, p), Equals, ca.label)
 	}
 }

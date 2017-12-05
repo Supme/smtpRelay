@@ -16,8 +16,6 @@ package oracles
 import (
 	"testing"
 	"time"
-
-	"golang.org/x/net/context"
 )
 
 func TestLocalOracle(t *testing.T) {
@@ -25,7 +23,7 @@ func TestLocalOracle(t *testing.T) {
 	defer l.Close()
 	m := map[uint64]struct{}{}
 	for i := 0; i < 100000; i++ {
-		ts, err := l.GetTimestamp(context.Background())
+		ts, err := l.GetTimestamp()
 		if err != nil {
 			t.Error(err)
 		}
@@ -40,7 +38,7 @@ func TestLocalOracle(t *testing.T) {
 func TestIsExpired(t *testing.T) {
 	o := NewLocalOracle()
 	defer o.Close()
-	ts, _ := o.GetTimestamp(context.Background())
+	ts, _ := o.GetTimestamp()
 	time.Sleep(1 * time.Second)
 	expire := o.IsExpired(uint64(ts), 500)
 	if !expire {

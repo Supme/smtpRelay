@@ -18,23 +18,18 @@ import (
 	"sort"
 
 	"github.com/juju/errors"
+	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/plan"
 	"github.com/pingcap/tidb/util/types"
 )
 
-// orderByRow binds a row to its order values, so it can be sorted.
-type orderByRow struct {
-	key []*types.Datum
-	row Row
-}
-
 // SortExec represents sorting executor.
 type SortExec struct {
-	baseExecutor
-
+	Src     Executor
 	ByItems []*plan.ByItems
 	Rows    []*orderByRow
+	ctx     context.Context
 	Idx     int
 	fetched bool
 	err     error
@@ -43,16 +38,14 @@ type SortExec struct {
 
 // Close implements the Executor Close interface.
 func (e *SortExec) Close() error {
+	e.fetched = false
 	e.Rows = nil
-	return errors.Trace(e.children[0].Close())
+	return e.Src.Close()
 }
 
-// Open implements the Executor Open interface.
-func (e *SortExec) Open() error {
-	e.fetched = false
-	e.Idx = 0
-	e.Rows = nil
-	return errors.Trace(e.children[0].Open())
+// Schema implements the Executor Schema interface.
+func (e *SortExec) Schema() *expression.Schema {
+	return e.schema
 }
 
 // Len returns the number of rows.
@@ -93,10 +86,10 @@ func (e *SortExec) Less(i, j int) bool {
 }
 
 // Next implements the Executor Next interface.
-func (e *SortExec) Next() (Row, error) {
+func (e *SortExec) Next() (*Row, error) {
 	if !e.fetched {
 		for {
-			srcRow, err := e.children[0].Next()
+			srcRow, err := e.Src.Next()
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -105,14 +98,13 @@ func (e *SortExec) Next() (Row, error) {
 			}
 			orderRow := &orderByRow{
 				row: srcRow,
-				key: make([]*types.Datum, len(e.ByItems)),
+				key: make([]types.Datum, len(e.ByItems)),
 			}
 			for i, byItem := range e.ByItems {
-				key, err := byItem.Expr.Eval(srcRow)
+				orderRow.key[i], err = byItem.Expr.Eval(srcRow.Data)
 				if err != nil {
 					return nil, errors.Trace(err)
 				}
-				orderRow.key[i] = &key
 			}
 			e.Rows = append(e.Rows, orderRow)
 		}
@@ -130,9 +122,9 @@ func (e *SortExec) Next() (Row, error) {
 	return row, nil
 }
 
-// TopNExec implements a Top-N algorithm and it is built from a SELECT statement with ORDER BY and LIMIT.
+// TopnExec implements a Top-N algorithm and it is built from a SELECT statement with ORDER BY and LIMIT.
 // Instead of sorting all the rows fetched from the table, it keeps the Top-N elements only in a heap to reduce memory usage.
-type TopNExec struct {
+type TopnExec struct {
 	SortExec
 	limit      *plan.Limit
 	totalCount int
@@ -140,7 +132,7 @@ type TopNExec struct {
 }
 
 // Less implements heap.Interface Less interface.
-func (e *TopNExec) Less(i, j int) bool {
+func (e *TopnExec) Less(i, j int) bool {
 	sc := e.ctx.GetSessionVars().StmtCtx
 	for index, by := range e.ByItems {
 		v1 := e.Rows[i].key[index]
@@ -167,35 +159,31 @@ func (e *TopNExec) Less(i, j int) bool {
 }
 
 // Len implements heap.Interface Len interface.
-func (e *TopNExec) Len() int {
+func (e *TopnExec) Len() int {
 	return e.heapSize
 }
 
 // Push implements heap.Interface Push interface.
-func (e *TopNExec) Push(x interface{}) {
+func (e *TopnExec) Push(x interface{}) {
 	e.Rows = append(e.Rows, x.(*orderByRow))
 	e.heapSize++
 }
 
 // Pop implements heap.Interface Pop interface.
-func (e *TopNExec) Pop() interface{} {
+func (e *TopnExec) Pop() interface{} {
 	e.heapSize--
 	return nil
 }
 
 // Next implements the Executor Next interface.
-func (e *TopNExec) Next() (Row, error) {
+func (e *TopnExec) Next() (*Row, error) {
 	if !e.fetched {
 		e.Idx = int(e.limit.Offset)
 		e.totalCount = int(e.limit.Offset + e.limit.Count)
-		cap := e.totalCount + 1
-		if cap > 1024 {
-			cap = 1024
-		}
-		e.Rows = make([]*orderByRow, 0, cap)
+		e.Rows = make([]*orderByRow, 0, e.totalCount+1)
 		e.heapSize = 0
 		for {
-			srcRow, err := e.children[0].Next()
+			srcRow, err := e.Src.Next()
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -205,14 +193,13 @@ func (e *TopNExec) Next() (Row, error) {
 			// build orderRow from srcRow.
 			orderRow := &orderByRow{
 				row: srcRow,
-				key: make([]*types.Datum, len(e.ByItems)),
+				key: make([]types.Datum, len(e.ByItems)),
 			}
 			for i, byItem := range e.ByItems {
-				key, err := byItem.Expr.Eval(srcRow)
+				orderRow.key[i], err = byItem.Expr.Eval(srcRow.Data)
 				if err != nil {
 					return nil, errors.Trace(err)
 				}
-				orderRow.key[i] = &key
 			}
 			if e.totalCount == e.heapSize {
 				// An equivalent of Push and Pop. We don't use the standard Push and Pop

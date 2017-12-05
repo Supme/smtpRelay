@@ -55,39 +55,30 @@ func (rv *resolverVerifier) Leave(in ast.Node) (out ast.Node, ok bool) {
 type resolverTestCase struct {
 	src   string
 	valid bool
-	err   string
 }
 
-var resolverTests = []resolverTestCase{
-	{"select c1 from t1", true, ""},
-	{"select c3 from t1", false, "[plan:1054]Unknown column 'c3' in 'field list'"},
-	{"select c1 from t4", false, "[schema:1146]Table 'test.t4' doesn't exist"},
-	{"select * from t1", true, ""},
-	{"select t1.* from t1", true, ""},
-	{"select t2.* from t1", false, "[plan:1054]Unknown table 't2'"},
-	{"select c1 as a, c1 as a from t1 group by a", true, ""},
-	{"select 1 as a, c1 as a, c2 as a from t1 group by a", true, ""},
-	{"select c1, c2 as c1 from t1 group by c1+1", true, ""},
-	{"select c1, c2 as c1 from t1 order by c1+1", true, ""},
-	{"select * from t1, t2 join t3 on t1.c1 = t2.c1", false, "[plan:1054]Unknown column 't1.c1' in 'on clause'"},
-	{"select * from t1, t2 join t3 on t2.c1 = t3.c1", true, ""},
-	{"select c1 from t1 group by c1 having c1 = 3", true, ""},
-	{"select c1 from t1 group by c1 having c2 = 3", false, "[plan:1054]Unknown column 'c2' in 'having clause'"},
-	{"select c1 from t1 where exists (select c2)", true, ""},
-	{"select cnt from (select count(c2) as cnt from t1 group by c1) t2 group by cnt", true, ""},
-	{"select c1 from t2 where t11.c1 < t2.c1", false, "[plan:1054]Unknown column 't11.c1' in 'where clause'"},
-	{"select c1 from t2 having t11.c1 < t2.c1", false, "[plan:1054]Unknown column 't11.c1' in 'having clause'"},
-	{"select c1 from t2 where t2.c1 < t2.c1 order by t11.c1", false, "[plan:1054]Unknown column 't11.c1' in 'order clause'"},
-	{"select c1 from t2 group by t11.c1", false, "[plan:1054]Unknown column 't11.c1' in 'group statement'"},
+var resolverTestCases = []resolverTestCase{
+	{"select c1 from t1", true},
+	{"select c3 from t1", false},
+	{"select c1 from t4", false},
+	{"select * from t1", true},
+	{"select t1.* from t1", true},
+	{"select t2.* from t1", false},
+	{"select c1 as a, c1 as a from t1 group by a", true},
+	{"select 1 as a, c1 as a, c2 as a from t1 group by a", true},
+	{"select c1, c2 as c1 from t1 group by c1+1", true},
+	{"select c1, c2 as c1 from t1 order by c1+1", true},
+	{"select * from t1, t2 join t3 on t1.c1 = t2.c1", false},
+	{"select * from t1, t2 join t3 on t2.c1 = t3.c1", true},
+	{"select c1 from t1 group by c1 having c1 = 3", true},
+	{"select c1 from t1 group by c1 having c2 = 3", false},
+	{"select c1 from t1 where exists (select c2)", true},
 }
 
 func (ts *testNameResolverSuite) TestNameResolver(c *C) {
-	store, dom, err := newStoreWithBootstrap()
+	store, err := newStoreWithBootstrap()
 	c.Assert(err, IsNil)
-	defer func() {
-		dom.Close()
-		store.Close()
-	}()
+	defer store.Close()
 	testKit := testkit.NewTestKit(c, store)
 	testKit.MustExec("use test")
 	testKit.MustExec("create table t1 (c1 int, c2 int)")
@@ -96,17 +87,16 @@ func (ts *testNameResolverSuite) TestNameResolver(c *C) {
 	ctx := testKit.Se.(context.Context)
 	domain := sessionctx.GetDomain(ctx)
 	ctx.GetSessionVars().CurrentDB = "test"
-	for _, tt := range resolverTests {
-		node, err := ts.ParseOneStmt(tt.src, "", "")
+	for _, tc := range resolverTestCases {
+		node, err := ts.ParseOneStmt(tc.src, "", "")
 		c.Assert(err, IsNil)
 		resolveErr := plan.ResolveName(node, domain.InfoSchema(), ctx)
-		if tt.valid {
+		if tc.valid {
 			c.Assert(resolveErr, IsNil)
-			verifier := &resolverVerifier{c: c, src: tt.src}
+			verifier := &resolverVerifier{c: c, src: tc.src}
 			node.Accept(verifier)
 		} else {
-			c.Assert(resolveErr, NotNil, Commentf("%s", tt.src))
-			c.Assert(resolveErr.Error(), Equals, tt.err, Commentf("%s", resolveErr.Error()))
+			c.Assert(resolveErr, NotNil, Commentf("%s", tc.src))
 		}
 	}
 }

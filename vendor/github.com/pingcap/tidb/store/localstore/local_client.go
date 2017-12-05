@@ -3,7 +3,6 @@ package localstore
 import (
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tipb/go-tipb"
 	goctx "golang.org/x/net/context"
 )
@@ -36,7 +35,7 @@ func (c *dbClient) Send(ctx goctx.Context, req *kv.Request) kv.Response {
 	return it
 }
 
-func (c *dbClient) IsRequestTypeSupported(reqType, subType int64) bool {
+func (c *dbClient) SupportRequestType(reqType, subType int64) bool {
 	switch reqType {
 	case kv.ReqTypeSelect, kv.ReqTypeIndex:
 		switch subType {
@@ -82,10 +81,6 @@ func supportExpr(exprType tipb.ExprType) bool {
 	// other functions
 	case tipb.ExprType_Coalesce, tipb.ExprType_IsNull:
 		return true
-	case tipb.ExprType_JsonType, tipb.ExprType_JsonExtract, tipb.ExprType_JsonUnquote, tipb.ExprType_JsonValid,
-		tipb.ExprType_JsonObject, tipb.ExprType_JsonArray, tipb.ExprType_JsonMerge, tipb.ExprType_JsonSet,
-		tipb.ExprType_JsonInsert, tipb.ExprType_JsonReplace, tipb.ExprType_JsonRemove, tipb.ExprType_JsonContains:
-		return true
 	case kv.ReqSubTypeDesc:
 		return true
 	default:
@@ -125,8 +120,7 @@ func (it *response) Next() (resp []byte, err error) {
 	case err = <-it.errChan:
 	}
 	if err != nil {
-		err1 := it.Close()
-		terror.Log(errors.Trace(err1))
+		it.Close()
 		return nil, errors.Trace(err)
 	}
 	if len(regionResp.newStartKey) != 0 {
@@ -140,8 +134,7 @@ func (it *response) Next() (resp []byte, err error) {
 	}
 	it.respGot++
 	if it.reqSent == len(it.tasks) && it.respGot == it.reqSent {
-		err = it.Close()
-		terror.Log(errors.Trace(err))
+		it.Close()
 	}
 	return regionResp.data, nil
 }

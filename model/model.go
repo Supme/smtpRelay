@@ -39,6 +39,7 @@ type Queue struct {
 	ID           uint `gorm:"primary_key"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	MessageType  string
 	MessageID    string
 	From         string
 	FromHostname string
@@ -50,13 +51,14 @@ type Queue struct {
 }
 
 type status struct {
-	ID        uint `gorm:"primary_key"`
-	QueuedAt  time.Time
-	SendingAt time.Time
-	From      string
-	Rcpt      string
-	MessageID string
-	Status    string
+	ID          uint `gorm:"primary_key"`
+	QueuedAt    time.Time
+	SendingAt   time.Time
+	From        string
+	Rcpt        string
+	MessageType string
+	MessageID   string
+	Status      string
 }
 
 // OpenQueueDb open queue database
@@ -82,9 +84,10 @@ func OpenStatusDb() (err error) {
 }
 
 // AddToQueue add email to queue
-func AddToQueue(messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) {
+func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) {
 	for _, rcpt := range rcpts {
 		QueueDb.Create(&Queue{
+			MessageType:  messageType,
 			MessageID:    messageID,
 			From:         from.Email(),
 			FromHostname: from.Hostname(),
@@ -129,12 +132,13 @@ func SetStatus(email *Queue) {
 
 func setStatus(email *Queue) {
 	StatusDb.Create(&status{
-		QueuedAt:  email.CreatedAt,
-		SendingAt: time.Now(),
-		From:      email.From,
-		Rcpt:      email.Rcpt,
-		MessageID: email.MessageID,
-		Status:    email.LaterStatus,
+		QueuedAt:    email.CreatedAt,
+		SendingAt:   time.Now(),
+		From:        email.From,
+		Rcpt:        email.Rcpt,
+		MessageType: email.MessageType,
+		MessageID:   email.MessageID,
+		Status:      email.LaterStatus,
 	})
 	QueueDb.Delete(&Queue{ID: email.ID})
 }
