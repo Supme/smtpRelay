@@ -12,7 +12,7 @@
         {
             "name": "github.com/denisenkom/go-mssqldb",
             "branch": "master",
-            "revision": "88555645b640cc621e32f8693d7586a1aa1575f4",
+            "revision": "8a15d1bb0c8eaa4b870c016b312de5b50b493b4e",
             "packages": [
                 "."
             ]
@@ -104,10 +104,22 @@
         },
         {
             "name": "golang.org/x/net",
-            "branch": "release-branch.go1.6",
-            "revision": "62685c2d7ca23c807425dca88b11a3e2323dab41",
+            "branch": "master",
+            "revision": "a8b9294777976932365dabb6640cf1468d95c70f",
             "packages": [
-                "context"
+                "context",
+                "idna",
+                "proxy"
+            ]
+        },
+        {
+            "name": "golang.org/x/text",
+            "branch": "master",
+            "revision": "57961680700a5336d15015c8c50686ca5ba362a4",
+            "packages": [
+                "secure/bidirule",
+                "unicode/bidi",
+                "unicode/norm"
             ]
         }
     ]

@@ -66,7 +66,7 @@ func OpenQueueDb() (err error) {
 		return
 	}
 	QueueDb.AutoMigrate(&Queue{})
-	QueueDb.LogMode(true)
+	// QueueDb.LogMode(true)
 	return
 }
 
