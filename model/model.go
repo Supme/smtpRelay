@@ -25,6 +25,7 @@ var Config struct {
 	RepeatIntervalMinutes uint     `toml:"RepeatIntervalMinutes"`
 	SendStream            uint     `toml:"SendStream"`
 	ResendStream          uint     `toml:"ResendStream"`
+	Debug                 bool     `toml:"Debug"`
 }
 
 var (
@@ -51,7 +52,6 @@ type Queue struct {
 }
 
 type status struct {
-	ID          uint `gorm:"primary_key"`
 	QueuedAt    time.Time
 	SendingAt   time.Time
 	From        string
@@ -68,7 +68,7 @@ func OpenQueueDb() (err error) {
 		return
 	}
 	QueueDb.AutoMigrate(&Queue{})
-	// QueueDb.LogMode(true)
+	QueueDb.LogMode(Config.Debug)
 	return
 }
 
@@ -79,7 +79,7 @@ func OpenStatusDb() (err error) {
 		return
 	}
 	StatusDb.AutoMigrate(&status{})
-	//	QueueDb.LogMode(true)
+	QueueDb.LogMode(Config.Debug)
 	return
 }
 

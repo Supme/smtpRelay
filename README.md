@@ -28,6 +28,8 @@ ResendStream = 2
 
 MaxRepeatSend = 2
 RepeatIntervalMinutes = 5
+
+Debug = false
 ```
 
 execute with default config file ./config ini
