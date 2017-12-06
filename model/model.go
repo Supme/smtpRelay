@@ -87,6 +87,7 @@ func OpenStatusDb() (err error) {
 // AddToQueue add email to queue
 func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) {
 	for _, rcpt := range rcpts {
+		// ToDo fix error mssql IDENTITY_INSERT
 		QueueDb.Create(&Queue{
 			MessageType:  messageType,
 			MessageID:    messageID,
@@ -143,7 +144,7 @@ func setStatus(email *Queue) {
 	//}).Error; err != nil {
 	//	log.Print(err)
 	//}
-
+	// ERROR mssql: Для столбца идентификаторов таблицы "statuses" явное значение необходимо указывать в тех случаях, когда либо IDENTITY_INSERT имеет значение ON, либо когда пользователь репликации осуществляет вставку в столбец идентификаторов, отмеченный как NOT FOR REPLICATION.
 	StatusDb.Exec(
 		`INSERT INTO "statuses" ("queued_at","sending_at","from","rcpt","message_type","message_id","status") VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		email.CreatedAt,
