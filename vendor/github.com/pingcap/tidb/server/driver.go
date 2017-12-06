@@ -14,16 +14,20 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
 
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/util/auth"
+	"github.com/pingcap/tidb/util/chunk"
+	goctx "golang.org/x/net/context"
 )
 
 // IDriver opens IContext.
 type IDriver interface {
-	// OpenCtx opens an IContext with connection id, client capability, collation and dbname.
-	OpenCtx(connID uint64, capability uint32, collation uint8, dbname string) (QueryCtx, error)
+	// OpenCtx opens an IContext with connection id, client capability, collation, dbname and optionally the tls state.
+	OpenCtx(connID uint64, capability uint32, collation uint8, dbname string, tlsState *tls.ConnectionState) (QueryCtx, error)
 }
 
 // QueryCtx is the interface to execute command.
@@ -44,7 +48,7 @@ type QueryCtx interface {
 	SetValue(key fmt.Stringer, value interface{})
 
 	// CommitTxn commits the transaction operations.
-	CommitTxn() error
+	CommitTxn(goCtx goctx.Context) error
 
 	// RollbackTxn undoes the transaction operations.
 	RollbackTxn() error
@@ -56,7 +60,7 @@ type QueryCtx interface {
 	CurrentDB() string
 
 	// Execute executes a SQL statement.
-	Execute(sql string) ([]ResultSet, error)
+	Execute(goCtx goctx.Context, sql string) ([]ResultSet, error)
 
 	// SetClientCapability sets client capability flags
 	SetClientCapability(uint32)
@@ -74,7 +78,7 @@ type QueryCtx interface {
 	Close() error
 
 	// Auth verifies user's authentication.
-	Auth(user string, auth []byte, salt []byte) bool
+	Auth(user *auth.UserIdentity, auth []byte, salt []byte) bool
 
 	// ShowProcess shows the information about the session.
 	ShowProcess() util.ProcessInfo
@@ -117,7 +121,10 @@ type PreparedStatement interface {
 
 // ResultSet is the result set of an query.
 type ResultSet interface {
-	Columns() ([]*ColumnInfo, error)
-	Next() ([]types.Datum, error)
+	Columns() []*ColumnInfo
+	Next(goctx.Context) (types.Row, error)
+	SupportChunk() bool
+	NewChunk() *chunk.Chunk
+	NextChunk(chk *chunk.Chunk) error
 	Close() error
 }

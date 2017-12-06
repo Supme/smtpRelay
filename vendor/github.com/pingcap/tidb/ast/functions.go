@@ -14,8 +14,11 @@
 package ast
 
 import (
+	"fmt"
+	"io"
+
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/types"
 )
 
 var (
@@ -26,11 +29,11 @@ var (
 
 // List scalar function names.
 const (
-	AndAnd     = "and"
+	LogicAnd   = "and"
 	Cast       = "cast"
 	LeftShift  = "leftshift"
 	RightShift = "rightshift"
-	OrOr       = "or"
+	LogicOr    = "or"
 	GE         = "ge"
 	LE         = "le"
 	EQ         = "eq"
@@ -63,6 +66,8 @@ const (
 	SetVar     = "setvar"
 	GetVar     = "getvar"
 	Values     = "values"
+	BitCount   = "bit_count"
+	GetParam   = "getparam"
 
 	// common functions
 	Coalesce = "coalesce"
@@ -111,6 +116,7 @@ const (
 	CurrentTimestamp = "current_timestamp"
 	Curtime          = "curtime"
 	Date             = "date"
+	DateLiteral      = "dateliteral"
 	DateAdd          = "date_add"
 	DateFormat       = "date_format"
 	DateSub          = "date_sub"
@@ -144,10 +150,12 @@ const (
 	SubTime          = "subtime"
 	Sysdate          = "sysdate"
 	Time             = "time"
+	TimeLiteral      = "timeliteral"
 	TimeFormat       = "time_format"
 	TimeToSec        = "time_to_sec"
 	TimeDiff         = "timediff"
 	Timestamp        = "timestamp"
+	TimestampLiteral = "timestampliteral"
 	TimestampAdd     = "timestampadd"
 	TimestampDiff    = "timestampdiff"
 	ToDays           = "to_days"
@@ -161,52 +169,57 @@ const (
 	WeekOfYear       = "weekofyear"
 	Year             = "year"
 	YearWeek         = "yearweek"
+	LastDay          = "last_day"
 
 	// string functions
-	ASCII          = "ascii"
-	Bin            = "bin"
-	Concat         = "concat"
-	ConcatWS       = "concat_ws"
-	Convert        = "convert"
-	Elt            = "elt"
-	ExportSet      = "Export"
-	Field          = "field"
-	Format         = "format"
-	FromBase64     = "from_base64"
-	InsertFunc     = "insert_func"
-	Instr          = "instr"
-	Lcase          = "lcase"
-	Left           = "left"
-	Length         = "length"
-	LoadFile       = "load_file"
-	Locate         = "locate"
-	Lower          = "lower"
-	Lpad           = "lpad"
-	LTrim          = "ltrim"
-	MakeSet        = "make_set"
-	Mid            = "mid"
-	Oct            = "oct"
-	Ord            = "ord"
-	Quote          = "quote"
-	Repeat         = "repeat"
-	Replace        = "replace"
-	Reverse        = "reverse"
-	RTrim          = "rtrim"
-	Space          = "space"
-	Strcmp         = "strcmp"
-	Substring      = "substring"
-	Substr         = "substr"
-	SubstringIndex = "substring_index"
-	Trim           = "trim"
-	Upper          = "upper"
-	Ucase          = "ucase"
-	Hex            = "hex"
-	Unhex          = "unhex"
-	Rpad           = "rpad"
-	BitLength      = "bit_length"
-	CharFunc       = "char_func"
-	CharLength     = "char_length"
-	FindInSet      = "find_in_set"
+	ASCII           = "ascii"
+	Bin             = "bin"
+	Concat          = "concat"
+	ConcatWS        = "concat_ws"
+	Convert         = "convert"
+	Elt             = "elt"
+	ExportSet       = "export_set"
+	Field           = "field"
+	Format          = "format"
+	FromBase64      = "from_base64"
+	InsertFunc      = "insert_func"
+	Instr           = "instr"
+	Lcase           = "lcase"
+	Left            = "left"
+	Length          = "length"
+	LoadFile        = "load_file"
+	Locate          = "locate"
+	Lower           = "lower"
+	Lpad            = "lpad"
+	LTrim           = "ltrim"
+	MakeSet         = "make_set"
+	Mid             = "mid"
+	Oct             = "oct"
+	Ord             = "ord"
+	Position        = "position"
+	Quote           = "quote"
+	Repeat          = "repeat"
+	Replace         = "replace"
+	Reverse         = "reverse"
+	Right           = "right"
+	RTrim           = "rtrim"
+	Space           = "space"
+	Strcmp          = "strcmp"
+	Substring       = "substring"
+	Substr          = "substr"
+	SubstringIndex  = "substring_index"
+	ToBase64        = "to_base64"
+	Trim            = "trim"
+	Upper           = "upper"
+	Ucase           = "ucase"
+	Hex             = "hex"
+	Unhex           = "unhex"
+	Rpad            = "rpad"
+	BitLength       = "bit_length"
+	CharFunc        = "char_func"
+	CharLength      = "char_length"
+	CharacterLength = "character_length"
+	FindInSet       = "find_in_set"
 
 	// information functions
 	Benchmark    = "benchmark"
@@ -224,6 +237,7 @@ const (
 	SystemUser   = "system_user"
 	User         = "user"
 	Version      = "version"
+	TiDBVersion  = "tidb_version"
 
 	// control functions
 	If     = "if"
@@ -257,16 +271,7 @@ const (
 	// encryption and compression functions
 	AesDecrypt               = "aes_decrypt"
 	AesEncrypt               = "aes_encrypt"
-	AsymmetricDecrypt        = "asymmetric_decrypt"
-	AsymmetricDerive         = "asymmetric_derive"
-	AsymmetricEncrypt        = "asymmetric_encrypt"
-	AsymmetricSign           = "asymmetric_sign"
-	AsymmetricVerify         = "asymmetric_verify"
 	Compress                 = "compress"
-	CreateAsymmetricPrivKey  = "create_asymmetric_priv_key"
-	CreateAsymmetricPubKey   = "create_asymmetric_pub_key"
-	CreateDHParameters       = "create_dh_parameters"
-	CreateDigest             = "create_digest"
 	Decode                   = "decode"
 	DesDecrypt               = "des_decrypt"
 	DesEncrypt               = "des_encrypt"
@@ -282,6 +287,20 @@ const (
 	Uncompress               = "uncompress"
 	UncompressedLength       = "uncompressed_length"
 	ValidatePasswordStrength = "validate_password_strength"
+
+	// json functions
+	JSONType     = "json_type"
+	JSONExtract  = "json_extract"
+	JSONUnquote  = "json_unquote"
+	JSONArray    = "json_array"
+	JSONObject   = "json_object"
+	JSONMerge    = "json_merge"
+	JSONValid    = "json_valid"
+	JSONSet      = "json_set"
+	JSONInsert   = "json_insert"
+	JSONReplace  = "json_replace"
+	JSONRemove   = "json_remove"
+	JSONContains = "json_contains"
 )
 
 // FuncCallExpr is for function expression.
@@ -291,6 +310,18 @@ type FuncCallExpr struct {
 	FnName model.CIStr
 	// Args is the function args.
 	Args []ExprNode
+}
+
+// Format the ExprNode into a Writer.
+func (n *FuncCallExpr) Format(w io.Writer) {
+	fmt.Fprintf(w, "%s(", n.FnName.String())
+	for i, arg := range n.Args {
+		arg.Format(w)
+		if i != len(n.Args)-1 {
+			fmt.Fprintf(w, ", ")
+		}
+	}
+	fmt.Fprintf(w, ")")
 }
 
 // Accept implements Node interface.
@@ -328,8 +359,29 @@ type FuncCastExpr struct {
 	Expr ExprNode
 	// Tp is the conversion type.
 	Tp *types.FieldType
-	// Cast, Convert and Binary share this struct.
+	// FunctionType is either Cast, Convert or Binary.
 	FunctionType CastFunctionType
+}
+
+// Format the ExprNode into a Writer.
+func (n *FuncCastExpr) Format(w io.Writer) {
+	switch n.FunctionType {
+	case CastFunction:
+		fmt.Fprintf(w, "CAST(")
+		n.Expr.Format(w)
+		fmt.Fprintf(w, " AS ")
+		n.Tp.FormatAsCastType(w)
+		fmt.Fprintf(w, ")")
+	case CastConvertFunction:
+		fmt.Fprintf(w, "CONVERT(")
+		n.Expr.Format(w)
+		fmt.Fprintf(w, ", ")
+		n.Tp.FormatAsCastType(w)
+		fmt.Fprintf(w, ")")
+	case CastBinaryOperator:
+		fmt.Fprintf(w, "BINARY ")
+		n.Expr.Format(w)
+	}
 }
 
 // Accept implements Node Accept interface.
@@ -390,6 +442,10 @@ const (
 	AggFuncMin = "min"
 	// AggFuncGroupConcat is the name of group_concat function.
 	AggFuncGroupConcat = "group_concat"
+	// AggFuncBitXor is the name of bit_xor function.
+	AggFuncBitXor = "bit_xor"
+	// AggFuncBitAnd is the name of bit_and function.
+	AggFuncBitAnd = "bit_and"
 )
 
 // AggregateFuncExpr represents aggregate function expression.
@@ -399,10 +455,15 @@ type AggregateFuncExpr struct {
 	F string
 	// Args is the function args.
 	Args []ExprNode
-	// If distinct is true, the function only aggregate distinct values.
+	// Distinct is true, function hence only aggregate distinct values.
 	// For example, column c1 values are "1", "2", "2",  "sum(c1)" is "5",
 	// but "sum(distinct c1)" is "3".
 	Distinct bool
+}
+
+// Format the ExprNode into a Writer.
+func (n *AggregateFuncExpr) Format(w io.Writer) {
+	panic("Not implemented")
 }
 
 // Accept implements Node Accept interface.

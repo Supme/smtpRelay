@@ -14,7 +14,6 @@
 package infoschema_test
 
 import (
-	"fmt"
 	"sync"
 	"testing"
 
@@ -26,11 +25,10 @@ import (
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/perfschema"
-	"github.com/pingcap/tidb/store/localstore"
-	"github.com/pingcap/tidb/store/localstore/goleveldb"
+	"github.com/pingcap/tidb/store/tikv"
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/testutil"
-	"github.com/pingcap/tidb/util/types"
 )
 
 func TestT(t *testing.T) {
@@ -45,13 +43,11 @@ type testSuite struct {
 
 func (*testSuite) TestT(c *C) {
 	defer testleak.AfterTest(c)()
-	driver := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
-	store, err := driver.Open("memory")
+	store, err := tikv.NewMockTikvStore()
 	c.Assert(err, IsNil)
 	defer store.Close()
 
-	handle, err := infoschema.NewHandle(store)
-	c.Assert(err, IsNil)
+	handle := infoschema.NewHandle(store)
 	dbName := model.NewCIStr("Test")
 	tbName := model.NewCIStr("T")
 	colName := model.NewCIStr("A")
@@ -186,24 +182,23 @@ func (*testSuite) TestT(c *C) {
 
 func checkApplyCreateNonExistsSchemaDoesNotPanic(c *C, txn kv.Transaction, builder *infoschema.Builder) {
 	m := meta.NewMeta(txn)
-	err := builder.ApplyDiff(m, &model.SchemaDiff{Type: model.ActionCreateSchema, SchemaID: 999})
+	_, err := builder.ApplyDiff(m, &model.SchemaDiff{Type: model.ActionCreateSchema, SchemaID: 999})
 	c.Assert(infoschema.ErrDatabaseNotExists.Equal(err), IsTrue)
 }
 
 func checkApplyCreateNonExistsTableDoesNotPanic(c *C, txn kv.Transaction, builder *infoschema.Builder, dbID int64) {
 	m := meta.NewMeta(txn)
-	err := builder.ApplyDiff(m, &model.SchemaDiff{Type: model.ActionCreateTable, SchemaID: dbID, TableID: 999})
+	_, err := builder.ApplyDiff(m, &model.SchemaDiff{Type: model.ActionCreateTable, SchemaID: dbID, TableID: 999})
 	c.Assert(infoschema.ErrTableNotExists.Equal(err), IsTrue)
 }
 
-// Make sure it is safe to concurrently create handle on multiple stores.
+// TestConcurrent makes sure it is safe to concurrently create handle on multiple stores.
 func (testSuite) TestConcurrent(c *C) {
 	defer testleak.AfterTest(c)()
 	storeCount := 5
 	stores := make([]kv.Storage, storeCount)
 	for i := 0; i < storeCount; i++ {
-		driver := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
-		store, err := driver.Open(fmt.Sprintf("memory_path_%d", i))
+		store, err := tikv.NewMockTikvStore()
 		c.Assert(err, IsNil)
 		stores[i] = store
 	}
@@ -217,22 +212,19 @@ func (testSuite) TestConcurrent(c *C) {
 	for _, store := range stores {
 		go func(s kv.Storage) {
 			defer wg.Done()
-			_, err := infoschema.NewHandle(s)
-			c.Assert(err, IsNil)
+			_ = infoschema.NewHandle(s)
 		}(store)
 	}
 	wg.Wait()
 }
 
-// Make sure that all tables of infomation_schema could be found in infoschema handle.
+// TestInfoTables makes sure that all tables of information_schema could be found in infoschema handle.
 func (*testSuite) TestInfoTables(c *C) {
 	defer testleak.AfterTest(c)()
-	driver := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
-	store, err := driver.Open("memory")
+	store, err := tikv.NewMockTikvStore()
 	c.Assert(err, IsNil)
 	defer store.Close()
-	handle, err := infoschema.NewHandle(store)
-	c.Assert(err, IsNil)
+	handle := infoschema.NewHandle(store)
 	builder, err := infoschema.NewBuilder(handle).InitWithDBInfos(nil, 0)
 	c.Assert(err, IsNil)
 	builder.Build()
@@ -255,6 +247,21 @@ func (*testSuite) TestInfoTables(c *C) {
 		"PLUGINS",
 		"TABLE_CONSTRAINTS",
 		"TRIGGERS",
+		"USER_PRIVILEGES",
+		"ENGINES",
+		"VIEWS",
+		"ROUTINES",
+		"SCHEMA_PRIVILEGES",
+		"COLUMN_PRIVILEGES",
+		"TABLE_PRIVILEGES",
+		"PARAMETERS",
+		"EVENTS",
+		"GLOBAL_STATUS",
+		"GLOBAL_VARIABLES",
+		"SESSION_STATUS",
+		"OPTIMIZER_TRACE",
+		"TABLESPACES",
+		"COLLATION_CHARACTER_SET_APPLICABILITY",
 	}
 	for _, t := range info_tables {
 		tb, err1 := is.TableByName(model.NewCIStr(infoschema.Name), model.NewCIStr(t))

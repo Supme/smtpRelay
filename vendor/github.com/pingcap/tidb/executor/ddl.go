@@ -15,65 +15,48 @@ package executor
 
 import (
 	"strings"
-	"time"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
-	"github.com/pingcap/tidb/context"
-	"github.com/pingcap/tidb/expression"
+	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/privilege"
-	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/sessionctx/varsutil"
-	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/types"
+	goctx "golang.org/x/net/context"
 )
 
 // DDLExec represents a DDL executor.
 // It grabs a DDL instance from Domain, calling the DDL methods to do the work.
 type DDLExec struct {
+	baseExecutor
+
 	Statement ast.StmtNode
-	ctx       context.Context
 	is        infoschema.InfoSchema
 	done      bool
 }
 
-// Schema implements the Executor Schema interface.
-func (e *DDLExec) Schema() *expression.Schema {
-	return expression.NewSchema()
-}
-
 // Next implements Execution Next interface.
-func (e *DDLExec) Next() (*Row, error) {
+func (e *DDLExec) Next(goCtx goctx.Context) (Row, error) {
 	if e.done {
 		return nil, nil
 	}
-	// For create/drop database, create/drop/truncate table
-	// DDL worker do not wait 2 lease, so we need to wait in executor to make sure
-	// all TiDB server has updated the schema.
-	var needWait bool
 	var err error
 	switch x := e.Statement.(type) {
 	case *ast.TruncateTableStmt:
 		err = e.executeTruncateTable(x)
-		needWait = true
 	case *ast.CreateDatabaseStmt:
 		err = e.executeCreateDatabase(x)
-		needWait = true
 	case *ast.CreateTableStmt:
 		err = e.executeCreateTable(x)
-		needWait = true
 	case *ast.CreateIndexStmt:
 		err = e.executeCreateIndex(x)
 	case *ast.DropDatabaseStmt:
 		err = e.executeDropDatabase(x)
-		needWait = true
 	case *ast.DropTableStmt:
 		err = e.executeDropTable(x)
-		needWait = true
 	case *ast.DropIndexStmt:
 		err = e.executeDropIndex(x)
 	case *ast.AlterTableStmt:
@@ -84,15 +67,8 @@ func (e *DDLExec) Next() (*Row, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if e.ctx.GetSessionVars().SkipDDLWait {
-		needWait = false
-	}
 
-	dom := sessionctx.GetDomain(e.ctx)
-	if needWait {
-		time.Sleep(dom.DDL().GetLease() * 2)
-	}
-
+	dom := domain.GetDomain(e.ctx)
 	// Update InfoSchema in TxnCtx, so it will pass schema check.
 	is := dom.InfoSchema()
 	txnCtx := e.ctx.GetSessionVars().TxnCtx
@@ -109,16 +85,25 @@ func (e *DDLExec) Close() error {
 	return nil
 }
 
+// Open implements the Executor Open interface.
+func (e *DDLExec) Open(goCtx goctx.Context) error {
+	return nil
+}
+
 func (e *DDLExec) executeTruncateTable(s *ast.TruncateTableStmt) error {
 	ident := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
-	err := sessionctx.GetDomain(e.ctx).DDL().TruncateTable(e.ctx, ident)
+	err := domain.GetDomain(e.ctx).DDL().TruncateTable(e.ctx, ident)
 	return errors.Trace(err)
 }
 
 func (e *DDLExec) executeRenameTable(s *ast.RenameTableStmt) error {
+	if len(s.TableToTables) != 1 {
+		// Now we only allow one schema changing at the same time.
+		return errors.Errorf("can't run multi schema change")
+	}
 	oldIdent := ast.Ident{Schema: s.OldTable.Schema, Name: s.OldTable.Name}
 	newIdent := ast.Ident{Schema: s.NewTable.Schema, Name: s.NewTable.Name}
-	err := sessionctx.GetDomain(e.ctx).DDL().RenameTable(e.ctx, oldIdent, newIdent)
+	err := domain.GetDomain(e.ctx).DDL().RenameTable(e.ctx, oldIdent, newIdent)
 	return errors.Trace(err)
 }
 
@@ -135,9 +120,9 @@ func (e *DDLExec) executeCreateDatabase(s *ast.CreateDatabaseStmt) error {
 			}
 		}
 	}
-	err := sessionctx.GetDomain(e.ctx).DDL().CreateSchema(e.ctx, model.NewCIStr(s.Name), opt)
+	err := domain.GetDomain(e.ctx).DDL().CreateSchema(e.ctx, model.NewCIStr(s.Name), opt)
 	if err != nil {
-		if terror.ErrorEqual(err, infoschema.ErrDatabaseExists) && s.IfNotExists {
+		if infoschema.ErrDatabaseExists.Equal(err) && s.IfNotExists {
 			err = nil
 		}
 	}
@@ -148,12 +133,12 @@ func (e *DDLExec) executeCreateTable(s *ast.CreateTableStmt) error {
 	ident := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
 	var err error
 	if s.ReferTable == nil {
-		err = sessionctx.GetDomain(e.ctx).DDL().CreateTable(e.ctx, ident, s.Cols, s.Constraints, s.Options)
+		err = domain.GetDomain(e.ctx).DDL().CreateTable(e.ctx, ident, s.Cols, s.Constraints, s.Options)
 	} else {
 		referIdent := ast.Ident{Schema: s.ReferTable.Schema, Name: s.ReferTable.Name}
-		err = sessionctx.GetDomain(e.ctx).DDL().CreateTableWithLike(e.ctx, ident, referIdent)
+		err = domain.GetDomain(e.ctx).DDL().CreateTableWithLike(e.ctx, ident, referIdent)
 	}
-	if terror.ErrorEqual(err, infoschema.ErrTableExists) {
+	if infoschema.ErrTableExists.Equal(err) {
 		if s.IfNotExists {
 			return nil
 		}
@@ -164,14 +149,14 @@ func (e *DDLExec) executeCreateTable(s *ast.CreateTableStmt) error {
 
 func (e *DDLExec) executeCreateIndex(s *ast.CreateIndexStmt) error {
 	ident := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
-	err := sessionctx.GetDomain(e.ctx).DDL().CreateIndex(e.ctx, ident, s.Unique, model.NewCIStr(s.IndexName), s.IndexColNames)
+	err := domain.GetDomain(e.ctx).DDL().CreateIndex(e.ctx, ident, s.Unique, model.NewCIStr(s.IndexName), s.IndexColNames, s.IndexOption)
 	return errors.Trace(err)
 }
 
 func (e *DDLExec) executeDropDatabase(s *ast.DropDatabaseStmt) error {
 	dbName := model.NewCIStr(s.Name)
-	err := sessionctx.GetDomain(e.ctx).DDL().DropSchema(e.ctx, dbName)
-	if terror.ErrorEqual(err, infoschema.ErrDatabaseNotExists) {
+	err := domain.GetDomain(e.ctx).DDL().DropSchema(e.ctx, dbName)
+	if infoschema.ErrDatabaseNotExists.Equal(err) {
 		if s.IfExists {
 			err = nil
 		} else {
@@ -197,31 +182,22 @@ func (e *DDLExec) executeDropTable(s *ast.DropTableStmt) error {
 	var notExistTables []string
 	for _, tn := range s.Tables {
 		fullti := ast.Ident{Schema: tn.Schema, Name: tn.Name}
-		schema, ok := e.is.SchemaByName(tn.Schema)
+		_, ok := e.is.SchemaByName(tn.Schema)
 		if !ok {
 			// TODO: we should return special error for table not exist, checking "not exist" is not enough,
 			// because some other errors may contain this error string too.
 			notExistTables = append(notExistTables, fullti.String())
 			continue
 		}
-		tb, err := e.is.TableByName(tn.Schema, tn.Name)
+		_, err := e.is.TableByName(tn.Schema, tn.Name)
 		if err != nil && infoschema.ErrTableNotExists.Equal(err) {
 			notExistTables = append(notExistTables, fullti.String())
 			continue
 		} else if err != nil {
 			return errors.Trace(err)
 		}
-		// Check Privilege
-		privChecker := privilege.GetPrivilegeChecker(e.ctx)
-		hasPriv, err := privChecker.Check(e.ctx, schema, tb.Meta(), mysql.DropPriv)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if !hasPriv {
-			return errors.Errorf("You do not have the privilege to drop table %s.%s.", tn.Schema, tn.Name)
-		}
 
-		err = sessionctx.GetDomain(e.ctx).DDL().DropTable(e.ctx, fullti)
+		err = domain.GetDomain(e.ctx).DDL().DropTable(e.ctx, fullti)
 		if infoschema.ErrDatabaseNotExists.Equal(err) || infoschema.ErrTableNotExists.Equal(err) {
 			notExistTables = append(notExistTables, fullti.String())
 		} else if err != nil {
@@ -236,7 +212,7 @@ func (e *DDLExec) executeDropTable(s *ast.DropTableStmt) error {
 
 func (e *DDLExec) executeDropIndex(s *ast.DropIndexStmt) error {
 	ti := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
-	err := sessionctx.GetDomain(e.ctx).DDL().DropIndex(e.ctx, ti, model.NewCIStr(s.IndexName))
+	err := domain.GetDomain(e.ctx).DDL().DropIndex(e.ctx, ti, model.NewCIStr(s.IndexName))
 	if (infoschema.ErrDatabaseNotExists.Equal(err) || infoschema.ErrTableNotExists.Equal(err)) && s.IfExists {
 		err = nil
 	}
@@ -245,6 +221,6 @@ func (e *DDLExec) executeDropIndex(s *ast.DropIndexStmt) error {
 
 func (e *DDLExec) executeAlterTable(s *ast.AlterTableStmt) error {
 	ti := ast.Ident{Schema: s.Table.Schema, Name: s.Table.Name}
-	err := sessionctx.GetDomain(e.ctx).DDL().AlterTable(e.ctx, ti, s.Specs)
+	err := domain.GetDomain(e.ctx).DDL().AlterTable(e.ctx, ti, s.Specs)
 	return errors.Trace(err)
 }

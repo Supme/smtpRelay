@@ -38,10 +38,10 @@ type SysVar struct {
 	// Scope is for whether can be changed or not
 	Scope ScopeFlag
 
-	// Variable name
+	// Name is the variable name.
 	Name string
 
-	// Variable value
+	// Value is the variable value.
 	Value string
 }
 
@@ -59,13 +59,17 @@ const (
 	CodeUnknownStatusVar terror.ErrCode = 1
 	CodeUnknownSystemVar terror.ErrCode = 1193
 	CodeIncorrectScope   terror.ErrCode = 1238
+	CodeUnknownTimeZone  terror.ErrCode = 1298
+	CodeReadOnly         terror.ErrCode = 1621
 )
 
 // Variable errors
 var (
-	UnknownStatusVar  = terror.ClassVariable.New(CodeUnknownStatusVar, "unknown status variable")
-	UnknownSystemVar  = terror.ClassVariable.New(CodeUnknownSystemVar, "unknown system variable '%s'")
-	ErrIncorrectScope = terror.ClassVariable.New(CodeIncorrectScope, "Incorrect variable scope")
+	UnknownStatusVar   = terror.ClassVariable.New(CodeUnknownStatusVar, "unknown status variable")
+	UnknownSystemVar   = terror.ClassVariable.New(CodeUnknownSystemVar, "unknown system variable '%s'")
+	ErrIncorrectScope  = terror.ClassVariable.New(CodeIncorrectScope, "Incorrect variable scope")
+	ErrUnknownTimeZone = terror.ClassVariable.New(CodeUnknownTimeZone, "unknown or incorrect time zone: %s")
+	ErrReadOnly        = terror.ClassVariable.New(CodeReadOnly, "variable is read only")
 )
 
 func init() {
@@ -78,6 +82,8 @@ func init() {
 	mySQLErrCodes := map[terror.ErrCode]uint16{
 		CodeUnknownSystemVar: mysql.ErrUnknownSystemVariable,
 		CodeIncorrectScope:   mysql.ErrIncorrectGlobalLocalVar,
+		CodeUnknownTimeZone:  mysql.ErrUnknownTimeZone,
+		CodeReadOnly:         mysql.ErrVariableIsReadonly,
 	}
 	terror.ErrClassToMySQLCodes[terror.ClassVariable] = mySQLErrCodes
 }
@@ -107,7 +113,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeGlobal, "slave_pending_jobs_size_max", "16777216"},
 	{ScopeNone, "innodb_sync_array_size", "1"},
 	{ScopeSession, "rand_seed2", ""},
-	{ScopeGlobal, "validate_password_number_count", ""},
+	{ScopeGlobal, "validate_password_number_count", "1"},
 	{ScopeSession, "gtid_next", ""},
 	{ScopeGlobal | ScopeSession, "sql_select_limit", "18446744073709551615"},
 	{ScopeGlobal, "ndb_show_foreign_key_mock_tables", ""},
@@ -131,7 +137,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeNone, "skip_name_resolve", "OFF"},
 	{ScopeNone, "performance_schema_max_file_handles", "32768"},
 	{ScopeSession, "transaction_allow_batching", ""},
-	{ScopeGlobal | ScopeSession, SQLModeVar, "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"},
+	{ScopeGlobal | ScopeSession, SQLModeVar, mysql.DefaultSQLMode},
 	{ScopeNone, "performance_schema_max_statement_classes", "168"},
 	{ScopeGlobal, "server_id", "0"},
 	{ScopeGlobal, "innodb_flushing_avg_loops", "30"},
@@ -191,6 +197,12 @@ var defaultSysVars = []*SysVar{
 	{ScopeNone, "skip_networking", "OFF"},
 	{ScopeGlobal, "innodb_monitor_reset", ""},
 	{ScopeNone, "have_ssl", "DISABLED"},
+	{ScopeNone, "have_openssl", "DISABLED"},
+	{ScopeNone, "ssl_ca", ""},
+	{ScopeNone, "ssl_cert", ""},
+	{ScopeNone, "ssl_key", ""},
+	{ScopeNone, "ssl_cipher", ""},
+	{ScopeNone, "tls_version", "TLSv1,TLSv1.1,TLSv1.2"},
 	{ScopeNone, "system_time_zone", "CST"},
 	{ScopeGlobal, "innodb_print_all_deadlocks", "OFF"},
 	{ScopeNone, "innodb_autoinc_lock_mode", "1"},
@@ -244,7 +256,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeNone, "performance_schema_max_file_classes", "50"},
 	{ScopeGlobal, "expire_logs_days", "0"},
 	{ScopeGlobal | ScopeSession, "binlog_rows_query_log_events", "OFF"},
-	{ScopeGlobal, "validate_password_policy", ""},
+	{ScopeGlobal, "validate_password_policy", "1"},
 	{ScopeGlobal, "default_password_lifetime", ""},
 	{ScopeNone, "pid_file", "/usr/local/mysql/data/localhost.pid"},
 	{ScopeNone, "innodb_undo_tablespaces", "0"},
@@ -375,7 +387,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeGlobal | ScopeSession, "binlog_format", "STATEMENT"},
 	{ScopeGlobal | ScopeSession, "optimizer_trace", "enabled=off,one_line=off"},
 	{ScopeGlobal | ScopeSession, "read_rnd_buffer_size", "262144"},
-	{ScopeNone, "version_comment", "MySQL Community Server (GPL)"},
+	{ScopeNone, "version_comment", "MySQL Community Server (Apache License 2.0)"},
 	{ScopeGlobal | ScopeSession, "net_write_timeout", "60"},
 	{ScopeGlobal, "innodb_buffer_pool_load_abort", "OFF"},
 	{ScopeGlobal | ScopeSession, "tx_isolation", "REPEATABLE-READ"},
@@ -408,10 +420,9 @@ var defaultSysVars = []*SysVar{
 	{ScopeNone, "innodb_read_only", "OFF"},
 	{ScopeNone, "datetime_format", "%Y-%m-%d %H:%i:%s"},
 	{ScopeGlobal, "log_syslog", ""},
-	{ScopeNone, "version", "5.6.25"},
+	{ScopeNone, "version", mysql.ServerVersion},
 	{ScopeGlobal | ScopeSession, "transaction_alloc_block_size", "8192"},
 	{ScopeGlobal, "sql_slave_skip_counter", "0"},
-	{ScopeNone, "have_openssl", "DISABLED"},
 	{ScopeGlobal, "innodb_large_prefix", "OFF"},
 	{ScopeNone, "performance_schema_max_cond_classes", "80"},
 	{ScopeGlobal, "innodb_io_capacity", "200"},
@@ -451,7 +462,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeGlobal, "rpl_semi_sync_master_enabled", ""},
 	{ScopeGlobal, "slow_query_log_file", "/usr/local/mysql/data/localhost-slow.log"},
 	{ScopeGlobal, "innodb_thread_sleep_delay", "10000"},
-	{ScopeNone, "license", "GPL"},
+	{ScopeNone, "license", "Apache License 2.0"},
 	{ScopeGlobal, "innodb_ft_aux_table", ""},
 	{ScopeGlobal | ScopeSession, "sql_warnings", "OFF"},
 	{ScopeGlobal | ScopeSession, "keep_files_on_create", "OFF"},
@@ -557,7 +568,7 @@ var defaultSysVars = []*SysVar{
 	{ScopeGlobal, "myisam_use_mmap", "OFF"},
 	{ScopeGlobal | ScopeSession, "ndb_join_pushdown", ""},
 	{ScopeGlobal | ScopeSession, "character_set_server", "latin1"},
-	{ScopeGlobal, "validate_password_special_char_count", ""},
+	{ScopeGlobal, "validate_password_special_char_count", "1"},
 	{ScopeNone, "performance_schema_max_thread_instances", "402"},
 	{ScopeGlobal, "slave_rows_search_algorithms", "TABLE_SCAN,INDEX_SCAN"},
 	{ScopeGlobal | ScopeSession, "ndbinfo_show_hidden", ""},
@@ -568,9 +579,9 @@ var defaultSysVars = []*SysVar{
 	{ScopeGlobal, "sync_relay_log_info", "10000"},
 	{ScopeGlobal | ScopeSession, "optimizer_trace_limit", "1"},
 	{ScopeNone, "innodb_ft_max_token_size", "84"},
-	{ScopeGlobal, "validate_password_length", ""},
+	{ScopeGlobal, "validate_password_length", "8"},
 	{ScopeGlobal, "ndb_log_binlog_index", ""},
-	{ScopeGlobal, "validate_password_mixed_case_count", ""},
+	{ScopeGlobal, "validate_password_mixed_case_count", "1"},
 	{ScopeGlobal, "innodb_api_bk_commit_interval", "5"},
 	{ScopeNone, "innodb_undo_directory", "."},
 	{ScopeNone, "bind_address", "*"},
@@ -597,10 +608,16 @@ var defaultSysVars = []*SysVar{
 	{ScopeSession, TiDBOptInSubqUnFolding, boolToIntStr(DefOptInSubqUnfolding)},
 	{ScopeSession, TiDBBuildStatsConcurrency, strconv.Itoa(DefBuildStatsConcurrency)},
 	{ScopeGlobal | ScopeSession, TiDBDistSQLScanConcurrency, strconv.Itoa(DefDistSQLScanConcurrency)},
+	{ScopeGlobal | ScopeSession, TiDBIndexJoinBatchSize, strconv.Itoa(DefIndexJoinBatchSize)},
 	{ScopeGlobal | ScopeSession, TiDBIndexLookupSize, strconv.Itoa(DefIndexLookupSize)},
 	{ScopeGlobal | ScopeSession, TiDBIndexLookupConcurrency, strconv.Itoa(DefIndexLookupConcurrency)},
-	{ScopeGlobal | ScopeSession, TiDBSkipDDLWait, boolToIntStr(DefSkipDDLWait)},
+	{ScopeGlobal | ScopeSession, TiDBIndexSerialScanConcurrency, strconv.Itoa(DefIndexSerialScanConcurrency)},
+	{ScopeGlobal | ScopeSession, TiDBMaxRowCountForINLJ, strconv.Itoa(DefMaxRowCountForINLJ)},
 	{ScopeGlobal | ScopeSession, TiDBSkipUTF8Check, boolToIntStr(DefSkipUTF8Check)},
+	{ScopeSession, TiDBBatchInsert, boolToIntStr(DefBatchInsert)},
+	{ScopeSession, TiDBBatchDelete, boolToIntStr(DefBatchDelete)},
+	{ScopeSession, TiDBCurrentTS, strconv.Itoa(DefCurretTS)},
+	{ScopeSession, TiDBMaxChunkSize, strconv.Itoa(DefMaxChunkSize)},
 }
 
 // SetNamesVariables is the system variable names related to set names statements.
@@ -611,6 +628,8 @@ var SetNamesVariables = []string{
 }
 
 const (
+	// CharacterSetConnection is the name for character_set_connection system variable.
+	CharacterSetConnection = "character_set_connection"
 	// CollationConnection is the name for collation_connection system variable.
 	CollationConnection = "collation_connection"
 	// CharsetDatabase is the name for character_set_database system variable.
@@ -621,6 +640,8 @@ const (
 
 // GlobalVarAccessor is the interface for accessing global scope system and status variables.
 type GlobalVarAccessor interface {
+	// GetAllSysVars gets all the global system variable values.
+	GetAllSysVars() (map[string]string, error)
 	// GetGlobalSysVar gets the global system variable value for name.
 	GetGlobalSysVar(name string) (string, error)
 	// SetGlobalSysVar sets the global system variable name to value.

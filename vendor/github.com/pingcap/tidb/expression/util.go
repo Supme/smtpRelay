@@ -14,13 +14,18 @@
 package expression
 
 import (
+	"strconv"
+	"strings"
+	"time"
 	"unicode"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
-	"github.com/pingcap/tidb/sessionctx/variable"
-	"github.com/pingcap/tidb/util/codec"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/context"
+	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/parser/opcode"
+	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/types"
 )
 
 // ExtractColumns extracts all columns from an expression.
@@ -29,6 +34,7 @@ func ExtractColumns(expr Expression) (cols []*Column) {
 	case *Column:
 		return []*Column{v}
 	case *ScalarFunction:
+		cols = make([]*Column, 0, len(v.GetArgs()))
 		for _, arg := range v.GetArgs() {
 			cols = append(cols, ExtractColumns(arg)...)
 		}
@@ -56,61 +62,12 @@ func ColumnSubstitute(expr Expression, schema *Schema, newExprs []Expression) Ex
 		for _, arg := range v.GetArgs() {
 			newArgs = append(newArgs, ColumnSubstitute(arg, schema, newExprs))
 		}
-		fun, _ := NewFunction(v.GetCtx(), v.FuncName.L, v.RetType, newArgs...)
-		return fun
+		return NewFunctionInternal(v.GetCtx(), v.FuncName.L, v.RetType, newArgs...)
 	}
 	return expr
 }
 
-func datumsToConstants(datums []types.Datum) []Expression {
-	constants := make([]Expression, 0, len(datums))
-	for _, d := range datums {
-		constants = append(constants, &Constant{Value: d})
-	}
-	return constants
-}
-
-// calculateSum adds v to sum.
-func calculateSum(sc *variable.StatementContext, sum, v types.Datum) (data types.Datum, err error) {
-	// for avg and sum calculation
-	// avg and sum use decimal for integer and decimal type, use float for others
-	// see https://dev.mysql.com/doc/refman/5.7/en/group-by-functions.html
-
-	switch v.Kind() {
-	case types.KindNull:
-	case types.KindInt64, types.KindUint64:
-		var d *types.MyDecimal
-		d, err = v.ToDecimal(sc)
-		if err == nil {
-			data = types.NewDecimalDatum(d)
-		}
-	case types.KindMysqlDecimal:
-		data = v
-	default:
-		var f float64
-		f, err = v.ToFloat64(sc)
-		if err == nil {
-			data = types.NewFloat64Datum(f)
-		}
-	}
-
-	if err != nil {
-		return data, errors.Trace(err)
-	}
-	if data.IsNull() {
-		return sum, nil
-	}
-	switch sum.Kind() {
-	case types.KindNull:
-		return data, nil
-	case types.KindFloat64, types.KindMysqlDecimal:
-		return types.ComputePlus(sum, data)
-	default:
-		return data, errors.Errorf("invalid value %v for aggregate", sum.Kind())
-	}
-}
-
-// getValidPrefix gets a prefix of string which can parsed to a number with base. the minimun base is 2 and the maximum is 36.
+// getValidPrefix gets a prefix of string which can parsed to a number with base. the minimum base is 2 and the maximum is 36.
 func getValidPrefix(s string, base int64) string {
 	var (
 		validLen int
@@ -149,29 +106,135 @@ Loop:
 	return s[:validLen]
 }
 
-// createDistinctChecker creates a new distinct checker.
-func createDistinctChecker() *distinctChecker {
-	return &distinctChecker{
-		existingKeys: make(map[string]bool),
+// SubstituteCorCol2Constant will substitute correlated column to constant value which it contains.
+// If the args of one scalar function are all constant, we will substitute it to constant.
+func SubstituteCorCol2Constant(expr Expression) (Expression, error) {
+	switch x := expr.(type) {
+	case *ScalarFunction:
+		allConstant := true
+		newArgs := make([]Expression, 0, len(x.GetArgs()))
+		for _, arg := range x.GetArgs() {
+			newArg, err := SubstituteCorCol2Constant(arg)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			_, ok := newArg.(*Constant)
+			newArgs = append(newArgs, newArg)
+			allConstant = allConstant && ok
+		}
+		if allConstant {
+			val, err := x.Eval(nil)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			return &Constant{Value: val, RetType: x.GetType()}, nil
+		}
+		var newSf Expression
+		if x.FuncName.L == ast.Cast {
+			newSf = BuildCastFunction(x.GetCtx(), newArgs[0], x.RetType)
+		} else {
+			newSf = NewFunctionInternal(x.GetCtx(), x.FuncName.L, x.GetType(), newArgs...)
+		}
+		return newSf, nil
+	case *CorrelatedColumn:
+		return &Constant{Value: *x.Data, RetType: x.GetType()}, nil
+	case *Constant:
+		if x.DeferredExpr != nil {
+			newExpr := FoldConstant(x)
+			return &Constant{Value: newExpr.(*Constant).Value, RetType: x.GetType()}, nil
+		}
 	}
+	return expr.Clone(), nil
 }
 
-// Checker stores existing keys and checks if given data is distinct.
-type distinctChecker struct {
-	existingKeys map[string]bool
+// timeZone2Duration converts timezone whose format should satisfy the regular condition
+// `(^(+|-)(0?[0-9]|1[0-2]):[0-5]?\d$)|(^+13:00$)` to time.Duration.
+func timeZone2Duration(tz string) time.Duration {
+	sign := 1
+	if strings.HasPrefix(tz, "-") {
+		sign = -1
+	}
+
+	i := strings.Index(tz, ":")
+	h, err := strconv.Atoi(tz[1:i])
+	terror.Log(errors.Trace(err))
+	m, err := strconv.Atoi(tz[i+1:])
+	terror.Log(errors.Trace(err))
+	return time.Duration(sign) * (time.Duration(h)*time.Hour + time.Duration(m)*time.Minute)
 }
 
-// Check checks if values is distinct.
-func (d *distinctChecker) Check(values []interface{}) (bool, error) {
-	bs, err := codec.EncodeValue([]byte{}, types.MakeDatums(values...)...)
-	if err != nil {
-		return false, errors.Trace(err)
+var oppositeOp = map[string]string{
+	ast.LT: ast.GE,
+	ast.GE: ast.LT,
+	ast.GT: ast.LE,
+	ast.LE: ast.GT,
+	ast.EQ: ast.NE,
+	ast.NE: ast.EQ,
+}
+
+// a op b is equal to b symmetricOp a
+var symmetricOp = map[opcode.Op]opcode.Op{
+	opcode.LT:     opcode.GT,
+	opcode.GE:     opcode.LE,
+	opcode.GT:     opcode.LT,
+	opcode.LE:     opcode.GE,
+	opcode.EQ:     opcode.EQ,
+	opcode.NE:     opcode.NE,
+	opcode.NullEQ: opcode.NullEQ,
+}
+
+// PushDownNot pushes the `not` function down to the expression's arguments.
+func PushDownNot(expr Expression, not bool, ctx context.Context) Expression {
+	if f, ok := expr.(*ScalarFunction); ok {
+		switch f.FuncName.L {
+		case ast.UnaryNot:
+			return PushDownNot(f.GetArgs()[0], !not, f.GetCtx())
+		case ast.LT, ast.GE, ast.GT, ast.LE, ast.EQ, ast.NE:
+			if not {
+				return NewFunctionInternal(f.GetCtx(), oppositeOp[f.FuncName.L], f.GetType(), f.GetArgs()...)
+			}
+			for i, arg := range f.GetArgs() {
+				f.GetArgs()[i] = PushDownNot(arg, false, f.GetCtx())
+			}
+			return f
+		case ast.LogicAnd:
+			if not {
+				args := f.GetArgs()
+				for i, a := range args {
+					args[i] = PushDownNot(a, true, f.GetCtx())
+				}
+				return NewFunctionInternal(f.GetCtx(), ast.LogicOr, f.GetType(), args...)
+			}
+			for i, arg := range f.GetArgs() {
+				f.GetArgs()[i] = PushDownNot(arg, false, f.GetCtx())
+			}
+			return f
+		case ast.LogicOr:
+			if not {
+				args := f.GetArgs()
+				for i, a := range args {
+					args[i] = PushDownNot(a, true, f.GetCtx())
+				}
+				return NewFunctionInternal(f.GetCtx(), ast.LogicAnd, f.GetType(), args...)
+			}
+			for i, arg := range f.GetArgs() {
+				f.GetArgs()[i] = PushDownNot(arg, false, f.GetCtx())
+			}
+			return f
+		}
 	}
-	key := string(bs)
-	_, ok := d.existingKeys[key]
-	if ok {
-		return false, nil
+	if not {
+		expr = NewFunctionInternal(ctx, ast.UnaryNot, types.NewFieldType(mysql.TypeTiny), expr)
 	}
-	d.existingKeys[key] = true
-	return true, nil
+	return expr
+}
+
+// Contains tests if `exprs` contains `e`.
+func Contains(exprs []Expression, e Expression) bool {
+	for _, expr := range exprs {
+		if e == expr {
+			return true
+		}
+	}
+	return false
 }

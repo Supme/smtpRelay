@@ -19,12 +19,12 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/store/localstore"
-	"github.com/pingcap/tidb/store/localstore/goleveldb"
+	"github.com/pingcap/tidb/store/tikv"
 	"github.com/pingcap/tidb/table/tables"
 	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/testleak"
-	"github.com/pingcap/tidb/util/types"
+	goctx "golang.org/x/net/context"
 )
 
 var _ = Suite(&testIndexSuite{})
@@ -34,9 +34,8 @@ type testIndexSuite struct {
 }
 
 func (s *testIndexSuite) SetUpSuite(c *C) {
-	path := "memory:"
-	d := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
-	store, err := d.Open(path)
+	testleak.BeforeTest()
+	store, err := tikv.NewMockTikvStore()
 	c.Assert(err, IsNil)
 	s.s = store
 }
@@ -44,10 +43,10 @@ func (s *testIndexSuite) SetUpSuite(c *C) {
 func (s *testIndexSuite) TearDownSuite(c *C) {
 	err := s.s.Close()
 	c.Assert(err, IsNil)
+	testleak.AfterTest(c)()
 }
 
 func (s *testIndexSuite) TestIndex(c *C) {
-	defer testleak.AfterTest(c)()
 	tblInfo := &model.TableInfo{
 		ID: 1,
 		Indices: []*model.IndexInfo{
@@ -128,7 +127,7 @@ func (s *testIndexSuite) TestIndex(c *C) {
 	c.Assert(terror.ErrorEqual(err, io.EOF), IsTrue)
 	it.Close()
 
-	err = txn.Commit()
+	err = txn.Commit(goctx.Background())
 	c.Assert(err, IsNil)
 
 	tblInfo = &model.TableInfo{
@@ -157,6 +156,17 @@ func (s *testIndexSuite) TestIndex(c *C) {
 	_, err = index.Create(txn, values, 2)
 	c.Assert(err, NotNil)
 
+	it, err = index.SeekFirst(txn)
+	c.Assert(err, IsNil)
+
+	getValues, h, err = it.Next()
+	c.Assert(err, IsNil)
+	c.Assert(getValues, HasLen, 2)
+	c.Assert(getValues[0].GetInt64(), Equals, int64(1))
+	c.Assert(getValues[1].GetInt64(), Equals, int64(2))
+	c.Assert(h, Equals, int64(1))
+	it.Close()
+
 	exist, h, err = index.Exist(txn, values, 1)
 	c.Assert(err, IsNil)
 	c.Assert(h, Equals, int64(1))
@@ -167,7 +177,7 @@ func (s *testIndexSuite) TestIndex(c *C) {
 	c.Assert(h, Equals, int64(1))
 	c.Assert(exist, IsTrue)
 
-	err = txn.Commit()
+	err = txn.Commit(goctx.Background())
 	c.Assert(err, IsNil)
 
 	_, err = index.FetchValues(make([]types.Datum, 0))
@@ -175,7 +185,6 @@ func (s *testIndexSuite) TestIndex(c *C) {
 }
 
 func (s *testIndexSuite) TestCombineIndexSeek(c *C) {
-	defer testleak.AfterTest(c)()
 	tblInfo := &model.TableInfo{
 		ID: 1,
 		Indices: []*model.IndexInfo{

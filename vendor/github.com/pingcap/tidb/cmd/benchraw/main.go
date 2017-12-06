@@ -22,9 +22,10 @@ import (
 	"sync"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
-	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/store/tikv"
+	"github.com/pingcap/tidb/terror"
 )
 
 var (
@@ -34,7 +35,7 @@ var (
 	valueSize = flag.Int("V", 5, "value size in byte")
 )
 
-// blind put bench
+// batchRawPut blinds put bench.
 func batchRawPut(value []byte) {
 	cli, err := tikv.NewRawKVClient(strings.Split(*pdAddr, ","))
 	if err != nil {
@@ -63,8 +64,11 @@ func batchRawPut(value []byte) {
 
 func main() {
 	flag.Parse()
-	log.SetLevelByString("warn")
-	go http.ListenAndServe(":9191", nil)
+	log.SetLevel(log.WarnLevel)
+	go func() {
+		err := http.ListenAndServe(":9191", nil)
+		terror.Log(errors.Trace(err))
+	}()
 
 	value := make([]byte, *valueSize)
 	t := time.Now()

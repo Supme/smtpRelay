@@ -52,6 +52,7 @@ type Queue struct {
 }
 
 type status struct {
+	ID          uint `gorm:"primary_key"`
 	QueuedAt    time.Time
 	SendingAt   time.Time
 	From        string
@@ -67,8 +68,8 @@ func OpenQueueDb() (err error) {
 	if err != nil {
 		return
 	}
-	QueueDb.AutoMigrate(&Queue{})
 	QueueDb.LogMode(Config.Debug)
+	QueueDb.AutoMigrate(&Queue{})
 	return
 }
 
@@ -78,8 +79,8 @@ func OpenStatusDb() (err error) {
 	if err != nil {
 		return
 	}
+	StatusDb.LogMode(Config.Debug)
 	StatusDb.AutoMigrate(&status{})
-	QueueDb.LogMode(Config.Debug)
 	return
 }
 
@@ -131,14 +132,28 @@ func SetStatus(email *Queue) {
 }
 
 func setStatus(email *Queue) {
-	StatusDb.Create(&status{
-		QueuedAt:    email.CreatedAt,
-		SendingAt:   time.Now(),
-		From:        email.From,
-		Rcpt:        email.Rcpt,
-		MessageType: email.MessageType,
-		MessageID:   email.MessageID,
-		Status:      email.LaterStatus,
-	})
+	//if err := StatusDb.Create(&status{
+	//	QueuedAt:    email.CreatedAt,
+	//	SendingAt:   time.Now(),
+	//	From:        email.From,
+	//	Rcpt:        email.Rcpt,
+	//	MessageType: email.MessageType,
+	//	MessageID:   email.MessageID,
+	//	Status:      email.LaterStatus,
+	//}).Error; err != nil {
+	//	log.Print(err)
+	//}
+
+	StatusDb.Exec(
+		`INSERT INTO "statuses" ("queued_at","sending_at","from","rcpt","message_type","message_id","status") VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		email.CreatedAt,
+		time.Now(),
+		email.From,
+		email.Rcpt,
+		email.MessageType,
+		email.MessageID,
+		email.LaterStatus,
+	)
+
 	QueueDb.Delete(&Queue{ID: email.ID})
 }

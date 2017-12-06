@@ -15,6 +15,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
@@ -26,32 +27,51 @@ import (
 	"github.com/pingcap/tidb/parser/opcode"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/types"
 )
 
 // Error instances.
 var (
-	ErrUnsupportedType      = terror.ClassOptimizerPlan.New(CodeUnsupportedType, "Unsupported type")
+	ErrUnsupportedType      = terror.ClassOptimizerPlan.New(CodeUnsupportedType, "Unsupported type %T")
 	SystemInternalErrorType = terror.ClassOptimizerPlan.New(SystemInternalError, "System internal error")
-	ErrUnknownColumn        = terror.ClassOptimizerPlan.New(CodeUnknownColumn, "Unknown column '%s' in '%s'")
+	ErrUnknownColumn        = terror.ClassOptimizerPlan.New(CodeUnknownColumn, mysql.MySQLErrName[mysql.ErrBadField])
+	ErrUnknownTable         = terror.ClassOptimizerPlan.New(CodeUnknownTable, mysql.MySQLErrName[mysql.ErrUnknownTable])
 	ErrWrongArguments       = terror.ClassOptimizerPlan.New(CodeWrongArguments, "Incorrect arguments to EXECUTE")
 	ErrAmbiguous            = terror.ClassOptimizerPlan.New(CodeAmbiguous, "Column '%s' in field list is ambiguous")
+	ErrAnalyzeMissIndex     = terror.ClassOptimizerPlan.New(CodeAnalyzeMissIndex, "Index '%s' in field list does not exist in table '%s'")
+	ErrAlterAutoID          = terror.ClassAutoid.New(CodeAlterAutoID, "No support for setting auto_increment using alter_table")
+	ErrBadGeneratedColumn   = terror.ClassOptimizerPlan.New(CodeBadGeneratedColumn, mysql.MySQLErrName[mysql.ErrBadGeneratedColumn])
+	ErrFieldNotInGroupBy    = terror.ClassOptimizerPlan.New(CodeFieldNotInGroupBy, mysql.MySQLErrName[mysql.ErrFieldNotInGroupBy])
+	ErrBadTable             = terror.ClassOptimizerPlan.New(CodeBadTable, mysql.MySQLErrName[mysql.ErrBadTable])
+	ErrKeyDoesNotExist      = terror.ClassOptimizerPlan.New(CodeKeyDoesNotExist, mysql.MySQLErrName[mysql.ErrKeyDoesNotExist])
 )
 
 // Error codes.
 const (
-	CodeUnsupportedType terror.ErrCode = 1
-	SystemInternalError terror.ErrCode = 2
-	CodeAmbiguous       terror.ErrCode = 1052
-	CodeUnknownColumn   terror.ErrCode = 1054
-	CodeWrongArguments  terror.ErrCode = 1210
+	CodeUnsupportedType    terror.ErrCode = 1
+	SystemInternalError                   = 2
+	CodeAlterAutoID                       = 3
+	CodeAnalyzeMissIndex                  = 4
+	CodeAmbiguous                         = 1052
+	CodeUnknownColumn                     = mysql.ErrBadField
+	CodeUnknownTable                      = mysql.ErrUnknownTable
+	CodeWrongArguments                    = 1210
+	CodeBadGeneratedColumn                = mysql.ErrBadGeneratedColumn
+	CodeFieldNotInGroupBy                 = mysql.ErrFieldNotInGroupBy
+	CodeBadTable                          = mysql.ErrBadTable
+	CodeKeyDoesNotExist                   = mysql.ErrKeyDoesNotExist
 )
 
 func init() {
 	tableMySQLErrCodes := map[terror.ErrCode]uint16{
-		CodeUnknownColumn:  mysql.ErrBadField,
-		CodeAmbiguous:      mysql.ErrNonUniq,
-		CodeWrongArguments: mysql.ErrWrongArguments,
+		CodeUnknownColumn:      mysql.ErrBadField,
+		CodeUnknownTable:       mysql.ErrBadTable,
+		CodeAmbiguous:          mysql.ErrNonUniq,
+		CodeWrongArguments:     mysql.ErrWrongArguments,
+		CodeBadGeneratedColumn: mysql.ErrBadGeneratedColumn,
+		CodeFieldNotInGroupBy:  mysql.ErrFieldNotInGroupBy,
+		CodeBadTable:           mysql.ErrBadTable,
+		CodeKeyDoesNotExist:    mysql.ErrKeyDoesNotExist,
 	}
 	terror.ErrClassToMySQLCodes[terror.ClassOptimizerPlan] = tableMySQLErrCodes
 }
@@ -64,7 +84,8 @@ type visitInfo struct {
 }
 
 type tableHintInfo struct {
-	sortMergeJoinTables []model.CIStr
+	indexNestedLoopJoinTables []model.CIStr
+	sortMergeJoinTables       []model.CIStr
 }
 
 func (info *tableHintInfo) ifPreferMergeJoin(tableNames ...*model.CIStr) bool {
@@ -88,13 +109,49 @@ func (info *tableHintInfo) ifPreferMergeJoin(tableNames ...*model.CIStr) bool {
 	return false
 }
 
+func (info *tableHintInfo) ifPreferINLJ(tableNames ...*model.CIStr) bool {
+	for _, tableName := range tableNames {
+		if tableName == nil {
+			continue
+		}
+		for _, curEntry := range info.indexNestedLoopJoinTables {
+			if curEntry.L == tableName.L {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// clauseCode indicates in which clause the column is currently.
+type clauseCode int
+
+const (
+	unknowClause clauseCode = iota
+	fieldList
+	havingClause
+	onClause
+	orderByClause
+	whereClause
+	groupByClause
+	showStatement
+)
+
+var clauseMsg = map[clauseCode]string{
+	unknowClause:  "",
+	fieldList:     "field list",
+	havingClause:  "having clause",
+	onClause:      "on clause",
+	orderByClause: "order clause",
+	whereClause:   "where clause",
+	groupByClause: "group statement",
+	showStatement: "show statement",
+}
+
 // planBuilder builds Plan from an ast.Node.
 // It just builds the ast node straightforwardly.
 type planBuilder struct {
 	err          error
-	hasAgg       bool
-	obj          interface{}
-	allocator    *idAllocator
 	ctx          context.Context
 	is           infoschema.InfoSchema
 	outerSchemas []*expression.Schema
@@ -105,6 +162,8 @@ type planBuilder struct {
 	visitInfo     []visitInfo
 	tableHintInfo []tableHintInfo
 	optFlag       uint64
+
+	curClause clauseCode
 }
 
 func (b *planBuilder) build(node ast.Node) Plan {
@@ -142,7 +201,7 @@ func (b *planBuilder) build(node ast.Node) Plan {
 		return b.buildAnalyze(x)
 	case *ast.BinlogStmt, *ast.FlushStmt, *ast.UseStmt,
 		*ast.BeginStmt, *ast.CommitStmt, *ast.RollbackStmt, *ast.CreateUserStmt, *ast.SetPwdStmt,
-		*ast.GrantStmt, *ast.DropUserStmt, *ast.AlterUserStmt, *ast.RevokeStmt, *ast.KillStmt:
+		*ast.GrantStmt, *ast.DropUserStmt, *ast.AlterUserStmt, *ast.RevokeStmt, *ast.KillStmt, *ast.DropStatsStmt:
 		return b.buildSimple(node.(ast.StmtNode))
 	case ast.DDLNode:
 		return b.buildDDL(x)
@@ -160,17 +219,14 @@ func (b *planBuilder) buildExecute(v *ast.ExecuteStmt) Plan {
 		}
 		vars = append(vars, newExpr)
 	}
-	exe := &Execute{Name: v.Name, UsingVars: vars}
+	exe := &Execute{Name: v.Name, UsingVars: vars, ExecID: v.ExecID}
 	exe.SetSchema(expression.NewSchema())
 	return exe
 }
 
 func (b *planBuilder) buildDo(v *ast.DoStmt) Plan {
 	exprs := make([]expression.Expression, 0, len(v.Exprs))
-	dual := &TableDual{
-		baseLogicalPlan: newBaseLogicalPlan(Dual, b.allocator),
-	}
-	dual.self = dual
+	dual := LogicalTableDual{RowCount: 1}.init(b.ctx)
 	for _, astExpr := range v.Exprs {
 		expr, _, err := b.rewrite(astExpr, dual, nil, true)
 		if err != nil {
@@ -180,12 +236,8 @@ func (b *planBuilder) buildDo(v *ast.DoStmt) Plan {
 		exprs = append(exprs, expr)
 	}
 	dual.SetSchema(expression.NewSchema())
-	p := &Projection{
-		Exprs:           exprs,
-		baseLogicalPlan: newBaseLogicalPlan(Proj, b.allocator),
-	}
-	p.initIDAndContext(b.ctx)
-	addChild(p, dual)
+	p := LogicalProjection{Exprs: exprs}.init(b.ctx)
+	setParentAndChildren(p, dual)
 	p.self = p
 	p.SetSchema(expression.NewSchema())
 	return p
@@ -193,8 +245,6 @@ func (b *planBuilder) buildDo(v *ast.DoStmt) Plan {
 
 func (b *planBuilder) buildSet(v *ast.SetStmt) Plan {
 	p := &Set{}
-	p.tp = St
-	p.allocator = b.allocator
 	for _, vars := range v.Variables {
 		assign := &expression.VarAssignment{
 			Name:     vars.Name,
@@ -202,7 +252,13 @@ func (b *planBuilder) buildSet(v *ast.SetStmt) Plan {
 			IsSystem: vars.IsSystem,
 		}
 		if _, ok := vars.Value.(*ast.DefaultExpr); !ok {
-			assign.Expr, _, b.err = b.rewrite(vars.Value, nil, nil, true)
+			if cn, ok2 := vars.Value.(*ast.ColumnNameExpr); ok2 && cn.Name.Table.L == "" {
+				// Convert column name expression to string value expression.
+				vars.Value = ast.NewValueExpr(cn.Name.Name.O)
+			}
+			mockTablePlan := LogicalTableDual{}.init(b.ctx)
+			mockTablePlan.SetSchema(expression.NewSchema())
+			assign.Expr, _, b.err = b.rewrite(vars.Value, mockTablePlan, nil, true)
 			if b.err != nil {
 				return nil
 			}
@@ -217,7 +273,6 @@ func (b *planBuilder) buildSet(v *ast.SetStmt) Plan {
 		}
 		p.VarAssigns = append(p.VarAssigns, assign)
 	}
-	p.initIDAndContext(b.ctx)
 	p.SetSchema(expression.NewSchema())
 	return p
 }
@@ -227,7 +282,7 @@ func (b *planBuilder) detectSelectAgg(sel *ast.SelectStmt) bool {
 	if sel.GroupBy != nil {
 		return true
 	}
-	for _, f := range sel.GetResultFields() {
+	for _, f := range sel.Fields.Fields {
 		if ast.HasAggFlag(f.Expr) {
 			return true
 		}
@@ -247,7 +302,7 @@ func (b *planBuilder) detectSelectAgg(sel *ast.SelectStmt) bool {
 	return false
 }
 
-func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indices []*model.IndexInfo, includeTableScan bool) {
+func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indices []*model.IndexInfo, includeTableScan bool, err error) {
 	var usableHints []*ast.IndexHint
 	for _, hint := range hints {
 		if hint.HintScope == ast.HintForScan {
@@ -261,7 +316,7 @@ func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indic
 		}
 	}
 	if len(usableHints) == 0 {
-		return publicIndices, true
+		return publicIndices, true, nil
 	}
 	var hasUse bool
 	var ignores []*model.IndexInfo
@@ -274,6 +329,8 @@ func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indic
 				idx := findIndexByName(publicIndices, idxName)
 				if idx != nil {
 					indices = append(indices, idx)
+				} else {
+					return nil, true, ErrKeyDoesNotExist.GenByArgs(idxName, tableInfo.Name)
 				}
 			}
 		case ast.HintIgnore:
@@ -282,6 +339,8 @@ func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indic
 				idx := findIndexByName(publicIndices, idxName)
 				if idx != nil {
 					ignores = append(ignores, idx)
+				} else {
+					return nil, true, ErrKeyDoesNotExist.GenByArgs(idxName, tableInfo.Name)
 				}
 			}
 		}
@@ -289,13 +348,13 @@ func availableIndices(hints []*ast.IndexHint, tableInfo *model.TableInfo) (indic
 	indices = removeIgnores(indices, ignores)
 	// If we have got FORCE or USE index hint, table scan is excluded.
 	if len(indices) != 0 {
-		return indices, false
+		return indices, false, nil
 	}
 	if hasUse {
 		// Empty use hint means don't use any index.
-		return nil, true
+		return nil, true, nil
 	}
-	return removeIgnores(publicIndices, ignores), true
+	return removeIgnores(publicIndices, ignores), true, nil
 }
 
 func removeIgnores(indices, ignores []*model.IndexInfo) []*model.IndexInfo {
@@ -320,14 +379,9 @@ func findIndexByName(indices []*model.IndexInfo, name model.CIStr) *model.IndexI
 	return nil
 }
 
-func (b *planBuilder) buildSelectLock(src Plan, lock ast.SelectLockType) *SelectLock {
-	selectLock := &SelectLock{
-		Lock:            lock,
-		baseLogicalPlan: newBaseLogicalPlan(Lock, b.allocator),
-	}
-	selectLock.self = selectLock
-	selectLock.initIDAndContext(b.ctx)
-	addChild(selectLock, src)
+func (b *planBuilder) buildSelectLock(src Plan, lock ast.SelectLockType) *LogicalLock {
+	selectLock := LogicalLock{Lock: lock}.init(b.ctx)
+	setParentAndChildren(selectLock, src)
 	selectLock.SetSchema(src.Schema())
 	return selectLock
 }
@@ -355,40 +409,41 @@ func (b *planBuilder) buildAdmin(as *ast.AdminStmt) Plan {
 	case ast.AdminShowDDL:
 		p = &ShowDDL{}
 		p.SetSchema(buildShowDDLFields())
+	case ast.AdminShowDDLJobs:
+		p = &ShowDDLJobs{}
+		p.SetSchema(buildShowDDLJobsFields())
+	case ast.AdminCancelDDLJobs:
+		p = &CancelDDLJobs{JobIDs: as.JobIDs}
+		p.SetSchema(buildCancelDDLJobsFields())
 	default:
 		b.err = ErrUnsupportedType.Gen("Unsupported type %T", as)
 	}
 	return p
 }
 
-// getColumnOffsets returns the offsets of index columns, normal columns and primary key with integer type.
-func getColumnOffsets(tn *ast.TableName) (indexOffsets []int, columnOffsets []int, pkOffset int) {
+// getColsInfo returns the info of index columns, normal columns and primary key.
+func getColsInfo(tn *ast.TableName) (indicesInfo []*model.IndexInfo, colsInfo []*model.ColumnInfo, pkCol *model.ColumnInfo) {
 	tbl := tn.TableInfo
 	// idxNames contains all the normal columns that can be analyzed more effectively, because those columns occur as index
 	// columns or primary key columns with integer type.
 	var idxNames []string
-	pkOffset = -1
 	if tbl.PKIsHandle {
-		for i, col := range tbl.Columns {
+		for _, col := range tbl.Columns {
 			if mysql.HasPriKeyFlag(col.Flag) {
 				idxNames = append(idxNames, col.Name.L)
-				pkOffset = i
+				pkCol = col
 			}
 		}
 	}
-	indices, _ := availableIndices(tn.IndexHints, tn.TableInfo)
-	for _, index := range indices {
-		for i, idx := range tn.TableInfo.Indices {
-			if index.Name.L == idx.Name.L {
-				indexOffsets = append(indexOffsets, i)
-				break
+	for _, idx := range tn.TableInfo.Indices {
+		if idx.State == model.StatePublic {
+			indicesInfo = append(indicesInfo, idx)
+			if len(idx.Columns) == 1 {
+				idxNames = append(idxNames, idx.Columns[0].Name.L)
 			}
 		}
-		if len(index.Columns) == 1 {
-			idxNames = append(idxNames, index.Columns[0].Name.L)
-		}
 	}
-	for i, col := range tbl.Columns {
+	for _, col := range tbl.Columns {
 		isIndexCol := false
 		for _, idx := range idxNames {
 			if idx == col.Name.L {
@@ -397,45 +452,71 @@ func getColumnOffsets(tn *ast.TableName) (indexOffsets []int, columnOffsets []in
 			}
 		}
 		if !isIndexCol {
-			columnOffsets = append(columnOffsets, i)
+			colsInfo = append(colsInfo, col)
 		}
 	}
 	return
 }
 
-func (b *planBuilder) buildAnalyze(as *ast.AnalyzeTableStmt) LogicalPlan {
-	p := &Analyze{
-		baseLogicalPlan: newBaseLogicalPlan(Aly, b.allocator),
-		PkOffset:        -1,
-	}
+func (b *planBuilder) buildAnalyzeTable(as *ast.AnalyzeTableStmt) Plan {
+	p := &Analyze{}
 	for _, tbl := range as.TableNames {
-		idxOffsets, colOffsets, pkOffset := getColumnOffsets(tbl)
-		result := &Analyze{
-			baseLogicalPlan: newBaseLogicalPlan(Aly, b.allocator),
-			Table:           tbl,
-			IdxOffsets:      idxOffsets,
-			ColOffsets:      colOffsets,
-			PkOffset:        pkOffset,
+		idxInfo, colInfo, pkInfo := getColsInfo(tbl)
+		for _, idx := range idxInfo {
+			p.IdxTasks = append(p.IdxTasks, AnalyzeIndexTask{TableInfo: tbl.TableInfo, IndexInfo: idx})
 		}
-		result.self = result
-		result.initIDAndContext(b.ctx)
-		result.SetSchema(expression.TableInfo2Schema(tbl.TableInfo))
-		addChild(p, result)
+		if len(colInfo) > 0 || pkInfo != nil {
+			p.ColTasks = append(p.ColTasks, AnalyzeColumnsTask{TableInfo: tbl.TableInfo, PKInfo: pkInfo, ColsInfo: colInfo})
+		}
 	}
-	p.self = p
-	p.initIDAndContext(b.ctx)
 	p.SetSchema(&expression.Schema{})
 	return p
 }
 
+func (b *planBuilder) buildAnalyzeIndex(as *ast.AnalyzeTableStmt) Plan {
+	p := &Analyze{}
+	tblInfo := as.TableNames[0].TableInfo
+	for _, idxName := range as.IndexNames {
+		idx := findIndexByName(tblInfo.Indices, idxName)
+		if idx == nil || idx.State != model.StatePublic {
+			b.err = ErrAnalyzeMissIndex.GenByArgs(idxName.O, tblInfo.Name.O)
+			break
+		}
+		p.IdxTasks = append(p.IdxTasks, AnalyzeIndexTask{TableInfo: tblInfo, IndexInfo: idx})
+	}
+	p.SetSchema(&expression.Schema{})
+	return p
+}
+
+func (b *planBuilder) buildAnalyze(as *ast.AnalyzeTableStmt) Plan {
+	if len(as.IndexNames) == 0 {
+		return b.buildAnalyzeTable(as)
+	}
+	return b.buildAnalyzeIndex(as)
+}
+
 func buildShowDDLFields() *expression.Schema {
-	schema := expression.NewSchema(make([]*expression.Column, 0, 6)...)
+	schema := expression.NewSchema(make([]*expression.Column, 0, 4)...)
 	schema.Append(buildColumn("", "SCHEMA_VER", mysql.TypeLonglong, 4))
 	schema.Append(buildColumn("", "OWNER", mysql.TypeVarchar, 64))
 	schema.Append(buildColumn("", "JOB", mysql.TypeVarchar, 128))
-	schema.Append(buildColumn("", "BG_SCHEMA_VER", mysql.TypeLonglong, 4))
-	schema.Append(buildColumn("", "BG_OWNER", mysql.TypeVarchar, 64))
-	schema.Append(buildColumn("", "BG_JOB", mysql.TypeVarchar, 128))
+	schema.Append(buildColumn("", "SELF_ID", mysql.TypeVarchar, 64))
+
+	return schema
+}
+
+func buildShowDDLJobsFields() *expression.Schema {
+	schema := expression.NewSchema(make([]*expression.Column, 0, 2)...)
+	schema.Append(buildColumn("", "JOBS", mysql.TypeVarchar, 128))
+	schema.Append(buildColumn("", "STATE", mysql.TypeVarchar, 64))
+
+	return schema
+}
+
+func buildCancelDDLJobsFields() *expression.Schema {
+	schema := expression.NewSchema(make([]*expression.Column, 0, 2)...)
+	schema.Append(buildColumn("", "JOB_ID", mysql.TypeVarchar, 64))
+	schema.Append(buildColumn("", "RESULT", mysql.TypeVarchar, 128))
 
 	return schema
 }
@@ -454,7 +535,7 @@ func buildColumn(tableName, name string, tp byte, size int) *expression.Column {
 		Collate: cl,
 		Tp:      tp,
 		Flen:    size,
-		Flag:    uint(flag),
+		Flag:    flag,
 	}
 	return &expression.Column{
 		ColName: model.NewCIStr(name),
@@ -470,7 +551,7 @@ func splitWhere(where ast.ExprNode) []ast.ExprNode {
 	switch x := where.(type) {
 	case nil:
 	case *ast.BinaryOperationExpr:
-		if x.Op == opcode.AndAnd {
+		if x.Op == opcode.LogicAnd {
 			conditions = append(conditions, splitWhere(x.L)...)
 			conditions = append(conditions, splitWhere(x.R)...)
 		} else {
@@ -485,21 +566,17 @@ func splitWhere(where ast.ExprNode) []ast.ExprNode {
 }
 
 func (b *planBuilder) buildShow(show *ast.ShowStmt) Plan {
-	var resultPlan Plan
-	p := &Show{
-		Tp:              show.Tp,
-		DBName:          show.DBName,
-		Table:           show.Table,
-		Column:          show.Column,
-		Flag:            show.Flag,
-		Full:            show.Full,
-		User:            show.User,
-		baseLogicalPlan: newBaseLogicalPlan("Show", b.allocator),
-	}
-	resultPlan = p
-	p.initIDAndContext(b.ctx)
-	p.self = p
-	switch show.Tp {
+	p := Show{
+		Tp:          show.Tp,
+		DBName:      show.DBName,
+		Table:       show.Table,
+		Column:      show.Column,
+		Flag:        show.Flag,
+		Full:        show.Full,
+		User:        show.User,
+		GlobalScope: show.GlobalScope,
+	}.init(b.ctx)
+	switch showTp := show.Tp; showTp {
 	case ast.ShowProcedureStatus:
 		p.SetSchema(buildShowProcedureSchema())
 	case ast.ShowTriggers:
@@ -509,43 +586,43 @@ func (b *planBuilder) buildShow(show *ast.ShowStmt) Plan {
 	case ast.ShowWarnings:
 		p.SetSchema(buildShowWarningsSchema())
 	default:
+		switch showTp {
+		case ast.ShowTables, ast.ShowTableStatus:
+			if p.DBName == "" {
+				b.err = ErrNoDB
+				return nil
+			}
+		}
 		p.SetSchema(buildShowSchema(show))
 	}
 	for i, col := range p.schema.Columns {
 		col.Position = i
 	}
-	var conditions []expression.Expression
+	mockTablePlan := LogicalTableDual{}.init(b.ctx)
+	mockTablePlan.SetSchema(p.schema)
 	if show.Pattern != nil {
-		expr, _, err := b.rewrite(show.Pattern, p, nil, false)
+		show.Pattern.Expr = &ast.ColumnNameExpr{
+			Name: &ast.ColumnName{Name: p.Schema().Columns[0].ColName},
+		}
+		expr, _, err := b.rewrite(show.Pattern, mockTablePlan, nil, false)
 		if err != nil {
 			b.err = errors.Trace(err)
 			return nil
 		}
-		conditions = append(conditions, expr)
+		p.Conditions = append(p.Conditions, expr)
 	}
 	if show.Where != nil {
 		conds := splitWhere(show.Where)
 		for _, cond := range conds {
-			expr, _, err := b.rewrite(cond, p, nil, false)
+			expr, _, err := b.rewrite(cond, mockTablePlan, nil, false)
 			if err != nil {
 				b.err = errors.Trace(err)
 				return nil
 			}
-			conditions = append(conditions, expr)
+			p.Conditions = append(p.Conditions, expr)
 		}
 	}
-	if len(conditions) != 0 {
-		sel := &Selection{
-			baseLogicalPlan: newBaseLogicalPlan(Sel, b.allocator),
-			Conditions:      conditions,
-		}
-		sel.initIDAndContext(b.ctx)
-		sel.self = sel
-		addChild(sel, p)
-		sel.SetSchema(p.Schema())
-		resultPlan = sel
-	}
-	return resultPlan
+	return p
 }
 
 func (b *planBuilder) buildSimple(node ast.StmtNode) Plan {
@@ -557,9 +634,8 @@ func (b *planBuilder) buildSimple(node ast.StmtNode) Plan {
 		b.visitInfo = appendVisitInfo(b.visitInfo, mysql.CreateUserPriv, "", "", "")
 	case *ast.GrantStmt:
 		b.visitInfo = collectVisitInfoFromGrantStmt(b.visitInfo, raw)
-	case *ast.SetPwdStmt, *ast.RevokeStmt:
-		// TODO: Require SUPER privilege, it's a temporary solution here.
-		b.visitInfo = appendVisitInfo(b.visitInfo, mysql.CreateUserPriv, "", "", "")
+	case *ast.SetPwdStmt, *ast.RevokeStmt, *ast.KillStmt:
+		b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SuperPriv, "", "", "")
 	}
 	return p
 }
@@ -587,10 +663,8 @@ func collectVisitInfoFromGrantStmt(vi []visitInfo, stmt *ast.GrantStmt) []visitI
 		vi = appendVisitInfo(vi, item.Priv, dbName, tableName, "")
 	}
 
-	if allPrivs != nil {
-		for _, priv := range allPrivs {
-			vi = appendVisitInfo(vi, priv, dbName, tableName, "")
-		}
+	for _, priv := range allPrivs {
+		vi = appendVisitInfo(vi, priv, dbName, tableName, "")
 	}
 
 	return vi
@@ -613,6 +687,45 @@ func (b *planBuilder) findDefaultValue(cols []*table.Column, name *ast.ColumnNam
 	return nil, ErrUnknownColumn.GenByArgs(name.Name.O, "field_list")
 }
 
+// resolveGeneratedColumns resolves generated columns with their generation
+// expressions respectively. onDups indicates which columns are in on-duplicate list.
+func (b *planBuilder) resolveGeneratedColumns(columns []*table.Column, onDups map[string]struct{}, mockPlan LogicalPlan) (igc InsertGeneratedColumns) {
+	for _, column := range columns {
+		if !column.IsGenerated() {
+			continue
+		}
+		columnName := &ast.ColumnName{Name: column.Name}
+		columnName.SetText(column.Name.O)
+
+		colExpr, _, err := mockPlan.findColumn(columnName)
+		if err != nil {
+			b.err = errors.Trace(err)
+			return
+		}
+
+		expr, _, err := b.rewrite(column.GeneratedExpr, mockPlan, nil, true)
+		if err != nil {
+			b.err = errors.Trace(err)
+			return
+		}
+		expr = expression.BuildCastFunction(b.ctx, expr, colExpr.GetType())
+
+		igc.Columns = append(igc.Columns, columnName)
+		igc.Exprs = append(igc.Exprs, expr)
+		if onDups == nil {
+			continue
+		}
+		for dep := range column.Dependences {
+			if _, ok := onDups[dep]; ok {
+				assign := &expression.Assignment{Col: colExpr, Expr: expr.Clone()}
+				igc.OnDuplicates = append(igc.OnDuplicates, assign)
+				break
+			}
+		}
+	}
+	return
+}
+
 func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 	ts, ok := insert.Table.TableRefs.Left.(*ast.TableSource)
 	if !ok {
@@ -625,21 +738,22 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 		return nil
 	}
 	tableInfo := tn.TableInfo
-	schema := expression.TableInfo2Schema(tableInfo)
-	table, ok := b.is.TableByID(tableInfo.ID)
+	// Build Schema with DBName otherwise ColumnRef with DBName cannot match any Column in Schema.
+	schema := expression.TableInfo2SchemaWithDBName(tn.Schema, tableInfo)
+	tableInPlan, ok := b.is.TableByID(tableInfo.ID)
 	if !ok {
 		b.err = errors.Errorf("Can't get table %s.", tableInfo.Name.O)
 		return nil
 	}
-	insertPlan := &Insert{
-		Table:           table,
-		Columns:         insert.Columns,
-		tableSchema:     schema,
-		IsReplace:       insert.IsReplace,
-		Priority:        insert.Priority,
-		Ignore:          insert.Ignore,
-		baseLogicalPlan: newBaseLogicalPlan(Ins, b.allocator),
-	}
+
+	insertPlan := Insert{
+		Table:       tableInPlan,
+		Columns:     insert.Columns,
+		tableSchema: schema,
+		IsReplace:   insert.IsReplace,
+		Priority:    insert.Priority,
+		IgnoreErr:   insert.IgnoreErr,
+	}.init(b.ctx)
 
 	b.visitInfo = append(b.visitInfo, visitInfo{
 		privilege: mysql.InsertPriv,
@@ -647,7 +761,40 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 		table:     tableInfo.Name.L,
 	})
 
-	cols := table.Cols()
+	columnByName := make(map[string]*table.Column, len(insertPlan.Table.Cols()))
+	for _, col := range insertPlan.Table.Cols() {
+		columnByName[col.Name.L] = col
+	}
+
+	// Check insert.Columns contains generated columns or not.
+	// It's for INSERT INTO t (...) VALUES (...)
+	if len(insert.Columns) > 0 {
+		for _, col := range insert.Columns {
+			if column, ok := columnByName[col.Name.L]; ok {
+				if column.IsGenerated() {
+					b.err = ErrBadGeneratedColumn.GenByArgs(col.Name.O, tableInfo.Name.O)
+					return nil
+				}
+			}
+		}
+	}
+
+	mockTablePlan := LogicalTableDual{}.init(b.ctx)
+	mockTablePlan.SetSchema(schema)
+
+	checkRefColumn := func(n ast.Node) ast.Node {
+		if insertPlan.NeedFillDefaultValue {
+			return n
+		}
+		switch n.(type) {
+		case *ast.ColumnName, *ast.ColumnNameExpr:
+			insertPlan.NeedFillDefaultValue = true
+		}
+		return n
+	}
+
+	cols := insertPlan.Table.Cols()
+	maxValuesItemLength := 0 // the max length of items in VALUES list.
 	for _, valuesItem := range insert.Lists {
 		exprList := make([]expression.Expression, 0, len(valuesItem))
 		for i, valueItem := range valuesItem {
@@ -665,15 +812,38 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 					RetType: &val.Type,
 				}
 			} else {
-				expr, _, err = b.rewrite(valueItem, nil, nil, true)
+				expr, _, err = b.rewriteWithPreprocess(valueItem, mockTablePlan, nil, true, checkRefColumn)
 			}
 			if err != nil {
 				b.err = errors.Trace(err)
 			}
 			exprList = append(exprList, expr)
 		}
+		if len(valuesItem) > maxValuesItemLength {
+			maxValuesItemLength = len(valuesItem)
+		}
 		insertPlan.Lists = append(insertPlan.Lists, exprList)
 	}
+
+	// It's for INSERT INTO t VALUES (...)
+	if len(insert.Columns) == 0 {
+		// The length of VALUES list maybe exceed table width,
+		// we ignore this here but do checking in executor.
+		var effectiveValuesLen int
+		if maxValuesItemLength <= len(tableInfo.Columns) {
+			effectiveValuesLen = maxValuesItemLength
+		} else {
+			effectiveValuesLen = len(tableInfo.Columns)
+		}
+		for i := 0; i < effectiveValuesLen; i++ {
+			col := tableInfo.Columns[i]
+			if col.IsGenerated() {
+				b.err = ErrBadGeneratedColumn.GenByArgs(col.Name.O, tableInfo.Name.O)
+				return nil
+			}
+		}
+	}
+
 	for _, assign := range insert.Setlist {
 		col, err := schema.FindColumn(assign.Column)
 		if err != nil {
@@ -684,9 +854,12 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 			b.err = errors.Errorf("Can't find column %s", assign.Column)
 			return nil
 		}
-		// Here we keep different behaviours with MySQL. MySQL allow set a = b, b = a and the result is NULL, NULL.
-		// It's unreasonable.
-		expr, _, err := b.rewrite(assign.Expr, nil, nil, true)
+		// Check set list contains generated column or not.
+		if columnByName[assign.Column.Name.L].IsGenerated() {
+			b.err = ErrBadGeneratedColumn.GenByArgs(assign.Column.Name.O, tableInfo.Name.O)
+			return nil
+		}
+		expr, _, err := b.rewriteWithPreprocess(assign.Expr, mockTablePlan, nil, true, checkRefColumn)
 		if err != nil {
 			b.err = errors.Trace(err)
 			return nil
@@ -696,16 +869,18 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 			Expr: expr,
 		})
 	}
-	mockTablePlan := &TableDual{}
-	mockTablePlan.SetSchema(schema)
+
+	onDupCols := make(map[string]struct{}, len(insert.OnDuplicate))
 	for _, assign := range insert.OnDuplicate {
-		col, err := schema.FindColumn(assign.Column)
+		col, _, err := mockTablePlan.findColumn(assign.Column)
 		if err != nil {
 			b.err = errors.Trace(err)
 			return nil
 		}
-		if col == nil {
-			b.err = errors.Errorf("Can't find column %s", assign.Column)
+		column := columnByName[assign.Column.Name.L]
+		// Check "on duplicate set list" contains generated column or not.
+		if column.IsGenerated() {
+			b.err = ErrBadGeneratedColumn.GenByArgs(assign.Column.Name.O, tableInfo.Name.O)
 			return nil
 		}
 		expr, _, err := b.rewrite(assign.Expr, mockTablePlan, nil, true)
@@ -717,15 +892,38 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 			Col:  col,
 			Expr: expr,
 		})
+		onDupCols[column.Name.L] = struct{}{}
 	}
-	insertPlan.initIDAndContext(b.ctx)
-	insertPlan.self = insertPlan
+
 	if insert.Select != nil {
 		selectPlan := b.build(insert.Select)
 		if b.err != nil {
 			return nil
 		}
-		addChild(insertPlan, selectPlan)
+		// If the schema of selectPlan contains any generated column, raises error.
+		var effectiveSelectLen int
+		if selectPlan.Schema().Len() <= len(tableInfo.Columns) {
+			effectiveSelectLen = selectPlan.Schema().Len()
+		} else {
+			effectiveSelectLen = len(tableInfo.Columns)
+		}
+		for i := 0; i < effectiveSelectLen; i++ {
+			col := tableInfo.Columns[i]
+			if col.IsGenerated() {
+				b.err = ErrBadGeneratedColumn.GenByArgs(col.Name.O, tableInfo.Name.O)
+				return nil
+			}
+		}
+		insertPlan.SelectPlan, b.err = doOptimize(b.optFlag, selectPlan.(LogicalPlan), b.ctx)
+		if b.err != nil {
+			return nil
+		}
+	}
+
+	// Calculate generated columns.
+	insertPlan.GenCols = b.resolveGeneratedColumns(insertPlan.Table.Cols(), onDupCols, mockTablePlan)
+	if b.err != nil {
+		return nil
 	}
 	insertPlan.SetSchema(expression.NewSchema())
 	return insertPlan
@@ -736,9 +934,21 @@ func (b *planBuilder) buildLoadData(ld *ast.LoadDataStmt) Plan {
 		IsLocal:    ld.IsLocal,
 		Path:       ld.Path,
 		Table:      ld.Table,
+		Columns:    ld.Columns,
 		FieldsInfo: ld.FieldsInfo,
 		LinesInfo:  ld.LinesInfo,
 	}
+	tableInfo := p.Table.TableInfo
+	tableInPlan, ok := b.is.TableByID(tableInfo.ID)
+	if !ok {
+		db := b.ctx.GetSessionVars().CurrentDB
+		b.err = infoschema.ErrTableNotExists.GenByArgs(db, tableInfo.Name.O)
+		return nil
+	}
+	schema := expression.TableInfo2Schema(tableInfo)
+	mockTablePlan := LogicalTableDual{}.init(b.ctx)
+	mockTablePlan.SetSchema(schema)
+	p.GenCols = b.resolveGeneratedColumns(tableInPlan.Cols(), nil, mockTablePlan)
 	p.SetSchema(expression.NewSchema())
 	return p
 }
@@ -827,22 +1037,47 @@ func (b *planBuilder) buildExplain(explain *ast.ExplainStmt) Plan {
 		b.err = errors.Trace(err)
 		return nil
 	}
-	p := &Explain{StmtPlan: targetPlan}
-	addChild(p, targetPlan)
-	schema := expression.NewSchema(make([]*expression.Column, 0, 3)...)
-	schema.Append(&expression.Column{
-		ColName: model.NewCIStr("ID"),
-		RetType: types.NewFieldType(mysql.TypeString),
-	})
-	schema.Append(&expression.Column{
-		ColName: model.NewCIStr("Json"),
-		RetType: types.NewFieldType(mysql.TypeString),
-	})
-	schema.Append(&expression.Column{
-		ColName: model.NewCIStr("ParentID"),
-		RetType: types.NewFieldType(mysql.TypeString),
-	})
-	p.SetSchema(schema)
+	pp, ok := targetPlan.(PhysicalPlan)
+	if !ok {
+		switch x := targetPlan.(type) {
+		case *Delete:
+			pp = x.SelectPlan
+		case *Update:
+			pp = x.SelectPlan
+		case *Insert:
+			if x.SelectPlan != nil {
+				pp = x.SelectPlan
+			}
+		}
+		if pp == nil {
+			b.err = ErrUnsupportedType.GenByArgs(targetPlan)
+			return nil
+		}
+	}
+	setParents4FinalPlan(pp)
+	p := &Explain{StmtPlan: pp}
+	switch strings.ToLower(explain.Format) {
+	case ast.ExplainFormatROW:
+		retFields := []string{"id", "parents", "children", "task", "operator info"}
+		schema := expression.NewSchema(make([]*expression.Column, 0, len(retFields))...)
+		for _, fieldName := range retFields {
+			schema.Append(buildColumn("", fieldName, mysql.TypeString, mysql.MaxBlobWidth))
+		}
+		schema.Append(buildColumn("", "count", mysql.TypeDouble, mysql.MaxRealWidth))
+		p.SetSchema(schema)
+		p.explainedPlans = map[int]bool{}
+		p.prepareRootTaskInfo(p.StmtPlan.(PhysicalPlan))
+	case ast.ExplainFormatDOT:
+		retFields := []string{"dot contents"}
+		schema := expression.NewSchema(make([]*expression.Column, 0, len(retFields))...)
+		for _, fieldName := range retFields {
+			schema.Append(buildColumn("", fieldName, mysql.TypeString, mysql.MaxBlobWidth))
+		}
+		p.SetSchema(schema)
+		p.prepareDotInfo(p.StmtPlan.(PhysicalPlan))
+	default:
+		b.err = errors.Errorf("explain format '%s' is not supported now", explain.Format)
+	}
 	return p
 }
 
@@ -910,34 +1145,6 @@ func buildShowWarningsSchema() *expression.Schema {
 	return schema
 }
 
-func composeShowSchema(names []string, ftypes []byte) *expression.Schema {
-	schema := expression.NewSchema(make([]*expression.Column, 0, len(names))...)
-	for i, name := range names {
-		col := &expression.Column{
-			ColName: model.NewCIStr(name),
-		}
-		var retType types.FieldType
-		if len(ftypes) == 0 || ftypes[i] == 0 {
-			// Use varchar as the default return column type.
-			retType.Tp = mysql.TypeVarchar
-		} else {
-			retType.Tp = ftypes[i]
-		}
-
-		if retType.Tp == mysql.TypeVarchar || retType.Tp == mysql.TypeString {
-			retType.Flen = 256
-		} else if retType.Tp == mysql.TypeDatetime {
-			retType.Flen = 19
-		} else {
-			retType.Flen = mysql.GetDefaultFieldLength(retType.Tp)
-		}
-		retType.Charset, retType.Collate = types.DefaultCharsetForType(retType.Tp)
-		col.RetType = &retType
-		schema.Append(col)
-	}
-	return schema
-}
-
 // buildShowSchema builds column info for ShowStmt including column name and type.
 func buildShowSchema(s *ast.ShowStmt) (schema *expression.Schema) {
 	var names []string
@@ -988,10 +1195,47 @@ func buildShowSchema(s *ast.ShowStmt) (schema *expression.Schema) {
 		ftypes = []byte{mysql.TypeVarchar, mysql.TypeLonglong, mysql.TypeVarchar, mysql.TypeLonglong,
 			mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeLonglong, mysql.TypeLonglong,
 			mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar}
+	case ast.ShowPlugins:
+		names = []string{"Name", "Status", "Type", "Library", "License"}
+		ftypes = []byte{
+			mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar,
+		}
 	case ast.ShowProcessList:
 		names = []string{"Id", "User", "Host", "db", "Command", "Time", "State", "Info"}
 		ftypes = []byte{mysql.TypeLonglong, mysql.TypeVarchar, mysql.TypeVarchar,
 			mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeLong, mysql.TypeVarchar, mysql.TypeString}
+	case ast.ShowStatsMeta:
+		names = []string{"Db_name", "Table_name", "Update_time", "Modify_count", "Row_count"}
+		ftypes = []byte{mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeDatetime, mysql.TypeLonglong, mysql.TypeLonglong}
+	case ast.ShowStatsHistograms:
+		names = []string{"Db_name", "Table_name", "Column_name", "Is_index", "Update_time", "Distinct_count", "Null_count"}
+		ftypes = []byte{mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeTiny, mysql.TypeDatetime,
+			mysql.TypeLonglong, mysql.TypeLonglong}
+	case ast.ShowStatsBuckets:
+		names = []string{"Db_name", "Table_name", "Column_name", "Is_index", "Bucket_id", "Count",
+			"Repeats", "Lower_Bound", "Upper_Bound"}
+		ftypes = []byte{mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeVarchar, mysql.TypeTiny, mysql.TypeLonglong,
+			mysql.TypeLonglong, mysql.TypeLonglong, mysql.TypeVarchar, mysql.TypeVarchar}
+	case ast.ShowProfiles: // ShowProfiles is deprecated.
+		names = []string{"Query_ID", "Duration", "Query"}
+		ftypes = []byte{mysql.TypeLong, mysql.TypeDouble, mysql.TypeVarchar}
 	}
-	return composeShowSchema(names, ftypes)
+
+	schema = expression.NewSchema(make([]*expression.Column, 0, len(names))...)
+	for i := range names {
+		col := &expression.Column{
+			ColName: model.NewCIStr(names[i]),
+		}
+		// User varchar as the default return column type.
+		tp := mysql.TypeVarchar
+		if len(ftypes) != 0 && ftypes[i] != mysql.TypeUnspecified {
+			tp = ftypes[i]
+		}
+		fieldType := types.NewFieldType(tp)
+		fieldType.Flen, fieldType.Decimal = mysql.GetDefaultFieldLengthAndDecimal(tp)
+		fieldType.Charset, fieldType.Collate = types.DefaultCharsetForType(tp)
+		col.RetType = fieldType
+		schema.Append(col)
+	}
+	return schema
 }

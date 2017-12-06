@@ -26,9 +26,10 @@ import (
 	"time"
 
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/sessionctx/variable"
+	"github.com/pingcap/tidb/sessionctx/stmtctx"
+	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/codec"
-	"github.com/pingcap/tidb/util/types"
 )
 
 type comparableRow struct {
@@ -42,9 +43,9 @@ type item struct {
 	value *comparableRow
 }
 
-// Min-heap of comparableRows
+// rowHeap maintains a min-heap property of comparableRows.
 type rowHeap struct {
-	sc     *variable.StatementContext
+	sc     *stmtctx.StatementContext
 	ims    []*item
 	byDesc []bool
 	err    error
@@ -52,12 +53,12 @@ type rowHeap struct {
 
 var headSize = 8
 
-func lessThan(sc *variable.StatementContext, i []types.Datum, j []types.Datum, byDesc []bool) (bool, error) {
+func lessThan(sc *stmtctx.StatementContext, i []types.Datum, j []types.Datum, byDesc []bool) (bool, error) {
 	for k := range byDesc {
 		v1 := i[k]
 		v2 := j[k]
 
-		ret, err := v1.CompareDatum(sc, v2)
+		ret, err := v1.CompareDatum(sc, &v2)
 		if err != nil {
 			return false, errors.Trace(err)
 		}
@@ -92,12 +93,12 @@ func (rh *rowHeap) Less(i, j int) bool {
 	return ret
 }
 
-// Push implements heap.Interface Push interface.
+// Push pushes an element into rowHeap.
 func (rh *rowHeap) Push(x interface{}) {
 	rh.ims = append(rh.ims, x.(*item))
 }
 
-// Push implements heap.Interface Pop interface.
+// Pop pops the last element from rowHeap.
 func (rh *rowHeap) Pop() interface{} {
 	old := rh.ims
 	n := len(old)
@@ -109,7 +110,7 @@ func (rh *rowHeap) Pop() interface{} {
 // FileSorter sorts the given rows according to the byDesc order.
 // FileSorter can sort rows that exceed predefined memory capacity.
 type FileSorter struct {
-	sc     *variable.StatementContext
+	sc     *stmtctx.StatementContext
 	byDesc []bool
 
 	workers  []*Worker
@@ -151,7 +152,7 @@ type Worker struct {
 
 // Builder builds a new FileSorter.
 type Builder struct {
-	sc       *variable.StatementContext
+	sc       *stmtctx.StatementContext
 	keySize  int
 	valSize  int
 	bufSize  int
@@ -161,7 +162,7 @@ type Builder struct {
 }
 
 // SetSC sets StatementContext instance which is required in row comparison.
-func (b *Builder) SetSC(sc *variable.StatementContext) *Builder {
+func (b *Builder) SetSC(sc *stmtctx.StatementContext) *Builder {
 	b.sc = sc
 	return b
 }
@@ -295,7 +296,7 @@ func (fs *FileSorter) closeAllFiles() error {
 	return nil
 }
 
-// Perform full in-memory sort.
+// internalSort performs full in-memory sort.
 func (fs *FileSorter) internalSort() (*comparableRow, error) {
 	w := fs.workers[fs.cWorker]
 
@@ -314,7 +315,7 @@ func (fs *FileSorter) internalSort() (*comparableRow, error) {
 	return nil, nil
 }
 
-// Perform external file sort.
+// externalSort performs external file sort.
 func (fs *FileSorter) externalSort() (*comparableRow, error) {
 	if !fs.fetched {
 		// flush all remaining content to file (if any)
@@ -384,12 +385,12 @@ func (fs *FileSorter) externalSort() (*comparableRow, error) {
 			return nil, errors.Trace(err)
 		}
 		if row != nil {
-			im := &item{
+			nextIm := &item{
 				index: im.index,
 				value: row,
 			}
 
-			heap.Push(fs.rowHeap, im)
+			heap.Push(fs.rowHeap, nextIm)
 			if fs.rowHeap.err != nil {
 				return nil, errors.Trace(fs.rowHeap.err)
 			}
@@ -412,7 +413,7 @@ func (fs *FileSorter) openAllFiles() error {
 	return nil
 }
 
-// Fetch the next row given the source file index.
+// fetchNextRow fetches the next row given the source file index.
 func (fs *FileSorter) fetchNextRow(index int) (*comparableRow, error) {
 	n, err := fs.fds[index].Read(fs.head)
 	if err == io.EOF {
@@ -483,7 +484,7 @@ func (fs *FileSorter) Input(key []types.Datum, val []types.Datum, handle int64) 
 			// all workers are busy now, cooldown and retry
 			time.Sleep(cooldownTime)
 		}
-		if time.Now().Sub(origin) >= abortTime {
+		if time.Since(origin) >= abortTime {
 			// weird: all workers are busy for at least 1 min
 			// choose to abort for safety
 			return errors.New("can not make progress since all workers are busy")
@@ -559,7 +560,7 @@ func (w *Worker) input(row *comparableRow) {
 	}
 }
 
-// Flush the buffer to file if it is full.
+// flushToFile flushes the buffer to file if it is full.
 func (w *Worker) flushToFile() {
 	defer w.ctx.wg.Done()
 	var (
@@ -579,7 +580,7 @@ func (w *Worker) flushToFile() {
 		w.err = errors.Trace(err)
 		return
 	}
-	defer outputFile.Close()
+	defer terror.Call(outputFile.Close)
 
 	for _, row := range w.buf {
 		prevLen = len(outputByte)

@@ -17,17 +17,19 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/util/testleak"
+	goctx "golang.org/x/net/context"
 )
 
-type testDDLCallback struct {
+type TestDDLCallback struct {
 	*BaseCallback
 
-	onJobRunBefore func(*model.Job)
-	onJobUpdated   func(*model.Job)
-	onBgJobUpdated func(*model.Job)
+	onJobRunBefore       func(*model.Job)
+	onJobUpdated         func(*model.Job)
+	OnJobUpdatedExported func(*model.Job)
+	onWatched            func(ctx goctx.Context)
 }
 
-func (tc *testDDLCallback) OnJobRunBefore(job *model.Job) {
+func (tc *TestDDLCallback) OnJobRunBefore(job *model.Job) {
 	if tc.onJobRunBefore != nil {
 		tc.onJobRunBefore(job)
 		return
@@ -36,7 +38,11 @@ func (tc *testDDLCallback) OnJobRunBefore(job *model.Job) {
 	tc.BaseCallback.OnJobRunBefore(job)
 }
 
-func (tc *testDDLCallback) OnJobUpdated(job *model.Job) {
+func (tc *TestDDLCallback) OnJobUpdated(job *model.Job) {
+	if tc.OnJobUpdatedExported != nil {
+		tc.OnJobUpdatedExported(job)
+		return
+	}
 	if tc.onJobUpdated != nil {
 		tc.onJobUpdated(job)
 		return
@@ -45,13 +51,13 @@ func (tc *testDDLCallback) OnJobUpdated(job *model.Job) {
 	tc.BaseCallback.OnJobUpdated(job)
 }
 
-func (tc *testDDLCallback) OnBgJobUpdated(job *model.Job) {
-	if tc.onBgJobUpdated != nil {
-		tc.onBgJobUpdated(job)
+func (tc *TestDDLCallback) OnWatched(ctx goctx.Context) {
+	if tc.onWatched != nil {
+		tc.onWatched(ctx)
 		return
 	}
 
-	tc.BaseCallback.OnBgJobUpdated(job)
+	tc.BaseCallback.OnWatched(ctx)
 }
 
 func (s *testDDLSuite) TestCallback(c *C) {
@@ -60,5 +66,5 @@ func (s *testDDLSuite) TestCallback(c *C) {
 	c.Assert(cb.OnChanged(nil), IsNil)
 	cb.OnJobRunBefore(nil)
 	cb.OnJobUpdated(nil)
-	cb.OnBgJobUpdated(nil)
+	cb.OnWatched(nil)
 }

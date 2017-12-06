@@ -10,7 +10,6 @@ import (
 // Run start sending queue emails
 func Run() {
 	go sendQueue()
-	time.Sleep(time.Second)
 	go resendQueue()
 }
 

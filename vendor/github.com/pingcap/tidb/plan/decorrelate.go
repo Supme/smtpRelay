@@ -14,16 +14,18 @@
 package plan
 
 import (
+	"github.com/juju/errors"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/expression"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/expression/aggregation"
+	"github.com/pingcap/tidb/types"
 )
 
 // extractCorColumnsBySchema only extracts the correlated columns that match the outer plan's schema.
 // e.g. If the correlated columns from inner plan are [t1.a, t2.a, t3.a] and outer plan's schema is [t2.a, t2.b, t2.c],
 // only [t2.a] is treated as this apply's correlated column.
-func (a *Apply) extractCorColumnsBySchema() {
+func (a *LogicalApply) extractCorColumnsBySchema() {
 	schema := a.children[0].Schema()
 	corCols := a.children[1].(LogicalPlan).extractCorrelatedCols()
 	resultCorCols := make([]*expression.CorrelatedColumn, schema.Len())
@@ -51,7 +53,7 @@ func (a *Apply) extractCorColumnsBySchema() {
 }
 
 // canPullUpAgg checks if an apply can pull an aggregation up.
-func (a *Apply) canPullUpAgg() bool {
+func (a *LogicalApply) canPullUpAgg() bool {
 	if a.JoinType != InnerJoin && a.JoinType != LeftOuterJoin {
 		return false
 	}
@@ -62,16 +64,13 @@ func (a *Apply) canPullUpAgg() bool {
 }
 
 // canPullUp checks if an aggregation can be pulled up. An aggregate function like count(*) cannot be pulled up.
-func (a *Aggregation) canPullUp() bool {
+func (a *LogicalAggregation) canPullUp() bool {
 	if len(a.GroupByItems) > 0 {
 		return false
 	}
 	for _, f := range a.AggFuncs {
 		for _, arg := range f.GetArgs() {
-			expr, err := expression.EvaluateExprWithNull(a.ctx, a.children[0].Schema(), arg)
-			if err != nil {
-				return false
-			}
+			expr := expression.EvaluateExprWithNull(a.ctx, a.children[0].Schema(), arg)
 			if con, ok := expr.(*expression.Constant); !ok || !con.Value.IsNull() {
 				return false
 			}
@@ -84,18 +83,19 @@ func (a *Aggregation) canPullUp() bool {
 type decorrelateSolver struct{}
 
 // optimize implements logicalOptRule interface.
-func (s *decorrelateSolver) optimize(p LogicalPlan, _ context.Context, _ *idAllocator) (LogicalPlan, error) {
-	if apply, ok := p.(*Apply); ok {
+func (s *decorrelateSolver) optimize(p LogicalPlan, _ context.Context) (LogicalPlan, error) {
+	if apply, ok := p.(*LogicalApply); ok {
 		outerPlan := apply.children[0]
 		innerPlan := apply.children[1].(LogicalPlan)
 		apply.extractCorColumnsBySchema()
 		if len(apply.corCols) == 0 {
 			// If the inner plan is non-correlated, the apply will be simplified to join.
-			join := &apply.Join
+			join := &apply.LogicalJoin
 			innerPlan.SetParents(join)
 			outerPlan.SetParents(join)
+			join.self = join
 			p = join
-		} else if sel, ok := innerPlan.(*Selection); ok {
+		} else if sel, ok := innerPlan.(*LogicalSelection); ok {
 			// If the inner plan is a selection, we add this condition to join predicates.
 			// Notice that no matter what kind of join is, it's always right.
 			newConds := make([]expression.Expression, 0, len(sel.Conditions))
@@ -104,55 +104,55 @@ func (s *decorrelateSolver) optimize(p LogicalPlan, _ context.Context, _ *idAllo
 			}
 			apply.attachOnConds(newConds)
 			innerPlan = sel.children[0].(LogicalPlan)
-			apply.SetChildren(outerPlan, innerPlan)
-			innerPlan.SetParents(apply)
-			return s.optimize(p, nil, nil)
-		} else if m, ok := innerPlan.(*MaxOneRow); ok {
+			setParentAndChildren(apply, outerPlan, innerPlan)
+			return s.optimize(p, nil)
+		} else if m, ok := innerPlan.(*LogicalMaxOneRow); ok {
 			if m.children[0].Schema().MaxOneRow {
 				innerPlan = m.children[0].(LogicalPlan)
-				innerPlan.SetParents(apply)
-				apply.SetChildren(outerPlan, innerPlan)
-				return s.optimize(p, nil, nil)
+				setParentAndChildren(apply, outerPlan, innerPlan)
+				return s.optimize(p, nil)
 			}
-		} else if proj, ok := innerPlan.(*Projection); ok {
+		} else if proj, ok := innerPlan.(*LogicalProjection); ok {
 			for i, expr := range proj.Exprs {
 				proj.Exprs[i] = expr.Decorrelate(outerPlan.Schema())
 			}
 			apply.columnSubstitute(proj.Schema(), proj.Exprs)
 			innerPlan = proj.children[0].(LogicalPlan)
-			apply.SetChildren(outerPlan, innerPlan)
-			innerPlan.SetParents(apply)
-			if apply.JoinType != SemiJoin && apply.JoinType != LeftOuterSemiJoin {
+			setParentAndChildren(apply, outerPlan, innerPlan)
+			if apply.JoinType != SemiJoin && apply.JoinType != LeftOuterSemiJoin && apply.JoinType != AntiSemiJoin && apply.JoinType != AntiLeftOuterSemiJoin {
 				proj.SetSchema(apply.Schema())
 				proj.Exprs = append(expression.Column2Exprs(outerPlan.Schema().Clone().Columns), proj.Exprs...)
 				apply.SetSchema(expression.MergeSchema(outerPlan.Schema(), innerPlan.Schema()))
 				proj.SetParents(apply.Parents()...)
-				np, _ := s.optimize(p, nil, nil)
-				proj.SetChildren(np)
-				np.SetParents(proj)
+				np, err := s.optimize(p, nil)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				setParentAndChildren(proj, np)
 				return proj, nil
 			}
-			return s.optimize(p, nil, nil)
-		} else if agg, ok := innerPlan.(*Aggregation); ok {
+			return s.optimize(p, nil)
+		} else if agg, ok := innerPlan.(*LogicalAggregation); ok {
 			if apply.canPullUpAgg() && agg.canPullUp() {
 				innerPlan = agg.children[0].(LogicalPlan)
 				apply.JoinType = LeftOuterJoin
-				apply.SetChildren(outerPlan, innerPlan)
-				innerPlan.SetParents(apply)
+				setParentAndChildren(apply, outerPlan, innerPlan)
 				agg.SetSchema(apply.Schema())
 				agg.GroupByItems = expression.Column2Exprs(outerPlan.Schema().Keys[0])
-				newAggFuncs := make([]expression.AggregationFunction, 0, apply.Schema().Len())
+				newAggFuncs := make([]aggregation.Aggregation, 0, apply.Schema().Len())
 				for _, col := range outerPlan.Schema().Columns {
-					first := expression.NewAggFunction(ast.AggFuncFirstRow, []expression.Expression{col}, false)
+					first := aggregation.NewAggFunction(ast.AggFuncFirstRow, []expression.Expression{col}, false)
 					newAggFuncs = append(newAggFuncs, first)
 				}
 				newAggFuncs = append(newAggFuncs, agg.AggFuncs...)
 				agg.AggFuncs = newAggFuncs
 				apply.SetSchema(expression.MergeSchema(outerPlan.Schema(), innerPlan.Schema()))
 				agg.SetParents(apply.Parents()...)
-				np, _ := s.optimize(p, nil, nil)
-				agg.SetChildren(np)
-				np.SetParents(agg)
+				np, err := s.optimize(p, nil)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				setParentAndChildren(agg, np)
 				agg.collectGroupByColumns()
 				return agg, nil
 			}
@@ -160,10 +160,12 @@ func (s *decorrelateSolver) optimize(p LogicalPlan, _ context.Context, _ *idAllo
 	}
 	newChildren := make([]Plan, 0, len(p.Children()))
 	for _, child := range p.Children() {
-		np, _ := s.optimize(child.(LogicalPlan), nil, nil)
+		np, err := s.optimize(child.(LogicalPlan), nil)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 		newChildren = append(newChildren, np)
-		np.SetParents(p)
 	}
-	p.SetChildren(newChildren...)
+	setParentAndChildren(p, newChildren...)
 	return p, nil
 }

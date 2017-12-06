@@ -43,9 +43,8 @@ var _ = math.Inf
 const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
 type NotLeader struct {
-	RegionId         *uint64      `protobuf:"varint,1,opt,name=region_id,json=regionId" json:"region_id,omitempty"`
-	Leader           *metapb.Peer `protobuf:"bytes,2,opt,name=leader" json:"leader,omitempty"`
-	XXX_unrecognized []byte       `json:"-"`
+	RegionId uint64       `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	Leader   *metapb.Peer `protobuf:"bytes,2,opt,name=leader" json:"leader,omitempty"`
 }
 
 func (m *NotLeader) Reset()                    { *m = NotLeader{} }
@@ -54,8 +53,8 @@ func (*NotLeader) ProtoMessage()               {}
 func (*NotLeader) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{0} }
 
 func (m *NotLeader) GetRegionId() uint64 {
-	if m != nil && m.RegionId != nil {
-		return *m.RegionId
+	if m != nil {
+		return m.RegionId
 	}
 	return 0
 }
@@ -68,7 +67,6 @@ func (m *NotLeader) GetLeader() *metapb.Peer {
 }
 
 type StoreNotMatch struct {
-	XXX_unrecognized []byte `json:"-"`
 }
 
 func (m *StoreNotMatch) Reset()                    { *m = StoreNotMatch{} }
@@ -77,8 +75,7 @@ func (*StoreNotMatch) ProtoMessage()               {}
 func (*StoreNotMatch) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{1} }
 
 type RegionNotFound struct {
-	RegionId         *uint64 `protobuf:"varint,1,opt,name=region_id,json=regionId" json:"region_id,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	RegionId uint64 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
 }
 
 func (m *RegionNotFound) Reset()                    { *m = RegionNotFound{} }
@@ -87,18 +84,17 @@ func (*RegionNotFound) ProtoMessage()               {}
 func (*RegionNotFound) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{2} }
 
 func (m *RegionNotFound) GetRegionId() uint64 {
-	if m != nil && m.RegionId != nil {
-		return *m.RegionId
+	if m != nil {
+		return m.RegionId
 	}
 	return 0
 }
 
 type KeyNotInRegion struct {
-	Key              []byte  `protobuf:"bytes,1,opt,name=key" json:"key,omitempty"`
-	RegionId         *uint64 `protobuf:"varint,2,opt,name=region_id,json=regionId" json:"region_id,omitempty"`
-	StartKey         []byte  `protobuf:"bytes,3,opt,name=start_key,json=startKey" json:"start_key,omitempty"`
-	EndKey           []byte  `protobuf:"bytes,4,opt,name=end_key,json=endKey" json:"end_key,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	Key      []byte `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	RegionId uint64 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	StartKey []byte `protobuf:"bytes,3,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	EndKey   []byte `protobuf:"bytes,4,opt,name=end_key,json=endKey,proto3" json:"end_key,omitempty"`
 }
 
 func (m *KeyNotInRegion) Reset()                    { *m = KeyNotInRegion{} }
@@ -114,8 +110,8 @@ func (m *KeyNotInRegion) GetKey() []byte {
 }
 
 func (m *KeyNotInRegion) GetRegionId() uint64 {
-	if m != nil && m.RegionId != nil {
-		return *m.RegionId
+	if m != nil {
+		return m.RegionId
 	}
 	return 0
 }
@@ -135,8 +131,7 @@ func (m *KeyNotInRegion) GetEndKey() []byte {
 }
 
 type StaleEpoch struct {
-	NewRegions       []*metapb.Region `protobuf:"bytes,1,rep,name=new_regions,json=newRegions" json:"new_regions,omitempty"`
-	XXX_unrecognized []byte           `json:"-"`
+	NewRegions []*metapb.Region `protobuf:"bytes,1,rep,name=new_regions,json=newRegions" json:"new_regions,omitempty"`
 }
 
 func (m *StaleEpoch) Reset()                    { *m = StaleEpoch{} }
@@ -152,7 +147,8 @@ func (m *StaleEpoch) GetNewRegions() []*metapb.Region {
 }
 
 type ServerIsBusy struct {
-	XXX_unrecognized []byte `json:"-"`
+	Reason    string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	BackoffMs uint64 `protobuf:"varint,2,opt,name=backoff_ms,json=backoffMs,proto3" json:"backoff_ms,omitempty"`
 }
 
 func (m *ServerIsBusy) Reset()                    { *m = ServerIsBusy{} }
@@ -160,8 +156,21 @@ func (m *ServerIsBusy) String() string            { return proto.CompactTextStri
 func (*ServerIsBusy) ProtoMessage()               {}
 func (*ServerIsBusy) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{5} }
 
+func (m *ServerIsBusy) GetReason() string {
+	if m != nil {
+		return m.Reason
+	}
+	return ""
+}
+
+func (m *ServerIsBusy) GetBackoffMs() uint64 {
+	if m != nil {
+		return m.BackoffMs
+	}
+	return 0
+}
+
 type StaleCommand struct {
-	XXX_unrecognized []byte `json:"-"`
 }
 
 func (m *StaleCommand) Reset()                    { *m = StaleCommand{} }
@@ -170,9 +179,8 @@ func (*StaleCommand) ProtoMessage()               {}
 func (*StaleCommand) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{6} }
 
 type RaftEntryTooLarge struct {
-	RegionId         *uint64 `protobuf:"varint,1,opt,name=region_id,json=regionId" json:"region_id,omitempty"`
-	EntrySize        *uint64 `protobuf:"varint,2,opt,name=entry_size,json=entrySize" json:"entry_size,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	RegionId  uint64 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	EntrySize uint64 `protobuf:"varint,2,opt,name=entry_size,json=entrySize,proto3" json:"entry_size,omitempty"`
 }
 
 func (m *RaftEntryTooLarge) Reset()                    { *m = RaftEntryTooLarge{} }
@@ -181,21 +189,21 @@ func (*RaftEntryTooLarge) ProtoMessage()               {}
 func (*RaftEntryTooLarge) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{7} }
 
 func (m *RaftEntryTooLarge) GetRegionId() uint64 {
-	if m != nil && m.RegionId != nil {
-		return *m.RegionId
+	if m != nil {
+		return m.RegionId
 	}
 	return 0
 }
 
 func (m *RaftEntryTooLarge) GetEntrySize() uint64 {
-	if m != nil && m.EntrySize != nil {
-		return *m.EntrySize
+	if m != nil {
+		return m.EntrySize
 	}
 	return 0
 }
 
 type Error struct {
-	Message           *string            `protobuf:"bytes,1,opt,name=message" json:"message,omitempty"`
+	Message           string             `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	NotLeader         *NotLeader         `protobuf:"bytes,2,opt,name=not_leader,json=notLeader" json:"not_leader,omitempty"`
 	RegionNotFound    *RegionNotFound    `protobuf:"bytes,3,opt,name=region_not_found,json=regionNotFound" json:"region_not_found,omitempty"`
 	KeyNotInRegion    *KeyNotInRegion    `protobuf:"bytes,4,opt,name=key_not_in_region,json=keyNotInRegion" json:"key_not_in_region,omitempty"`
@@ -204,7 +212,6 @@ type Error struct {
 	StaleCommand      *StaleCommand      `protobuf:"bytes,7,opt,name=stale_command,json=staleCommand" json:"stale_command,omitempty"`
 	StoreNotMatch     *StoreNotMatch     `protobuf:"bytes,8,opt,name=store_not_match,json=storeNotMatch" json:"store_not_match,omitempty"`
 	RaftEntryTooLarge *RaftEntryTooLarge `protobuf:"bytes,9,opt,name=raft_entry_too_large,json=raftEntryTooLarge" json:"raft_entry_too_large,omitempty"`
-	XXX_unrecognized  []byte             `json:"-"`
 }
 
 func (m *Error) Reset()                    { *m = Error{} }
@@ -213,8 +220,8 @@ func (*Error) ProtoMessage()               {}
 func (*Error) Descriptor() ([]byte, []int) { return fileDescriptorErrorpb, []int{8} }
 
 func (m *Error) GetMessage() string {
-	if m != nil && m.Message != nil {
-		return *m.Message
+	if m != nil {
+		return m.Message
 	}
 	return ""
 }
@@ -301,10 +308,10 @@ func (m *NotLeader) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.RegionId != nil {
+	if m.RegionId != 0 {
 		dAtA[i] = 0x8
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(*m.RegionId))
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.RegionId))
 	}
 	if m.Leader != nil {
 		dAtA[i] = 0x12
@@ -315,9 +322,6 @@ func (m *NotLeader) MarshalTo(dAtA []byte) (int, error) {
 			return 0, err
 		}
 		i += n1
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	return i, nil
 }
@@ -337,9 +341,6 @@ func (m *StoreNotMatch) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
 	return i, nil
 }
 
@@ -358,13 +359,10 @@ func (m *RegionNotFound) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.RegionId != nil {
+	if m.RegionId != 0 {
 		dAtA[i] = 0x8
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(*m.RegionId))
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.RegionId))
 	}
 	return i, nil
 }
@@ -384,31 +382,28 @@ func (m *KeyNotInRegion) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.Key != nil {
+	if len(m.Key) > 0 {
 		dAtA[i] = 0xa
 		i++
 		i = encodeVarintErrorpb(dAtA, i, uint64(len(m.Key)))
 		i += copy(dAtA[i:], m.Key)
 	}
-	if m.RegionId != nil {
+	if m.RegionId != 0 {
 		dAtA[i] = 0x10
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(*m.RegionId))
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.RegionId))
 	}
-	if m.StartKey != nil {
+	if len(m.StartKey) > 0 {
 		dAtA[i] = 0x1a
 		i++
 		i = encodeVarintErrorpb(dAtA, i, uint64(len(m.StartKey)))
 		i += copy(dAtA[i:], m.StartKey)
 	}
-	if m.EndKey != nil {
+	if len(m.EndKey) > 0 {
 		dAtA[i] = 0x22
 		i++
 		i = encodeVarintErrorpb(dAtA, i, uint64(len(m.EndKey)))
 		i += copy(dAtA[i:], m.EndKey)
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	return i, nil
 }
@@ -440,9 +435,6 @@ func (m *StaleEpoch) MarshalTo(dAtA []byte) (int, error) {
 			i += n
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
 	return i, nil
 }
 
@@ -461,8 +453,16 @@ func (m *ServerIsBusy) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.Reason) > 0 {
+		dAtA[i] = 0xa
+		i++
+		i = encodeVarintErrorpb(dAtA, i, uint64(len(m.Reason)))
+		i += copy(dAtA[i:], m.Reason)
+	}
+	if m.BackoffMs != 0 {
+		dAtA[i] = 0x10
+		i++
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.BackoffMs))
 	}
 	return i, nil
 }
@@ -482,9 +482,6 @@ func (m *StaleCommand) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
 	return i, nil
 }
 
@@ -503,18 +500,15 @@ func (m *RaftEntryTooLarge) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.RegionId != nil {
+	if m.RegionId != 0 {
 		dAtA[i] = 0x8
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(*m.RegionId))
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.RegionId))
 	}
-	if m.EntrySize != nil {
+	if m.EntrySize != 0 {
 		dAtA[i] = 0x10
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(*m.EntrySize))
-	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+		i = encodeVarintErrorpb(dAtA, i, uint64(m.EntrySize))
 	}
 	return i, nil
 }
@@ -534,11 +528,11 @@ func (m *Error) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.Message != nil {
+	if len(m.Message) > 0 {
 		dAtA[i] = 0xa
 		i++
-		i = encodeVarintErrorpb(dAtA, i, uint64(len(*m.Message)))
-		i += copy(dAtA[i:], *m.Message)
+		i = encodeVarintErrorpb(dAtA, i, uint64(len(m.Message)))
+		i += copy(dAtA[i:], m.Message)
 	}
 	if m.NotLeader != nil {
 		dAtA[i] = 0x12
@@ -620,9 +614,6 @@ func (m *Error) MarshalTo(dAtA []byte) (int, error) {
 		}
 		i += n9
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
-	}
 	return i, nil
 }
 
@@ -656,15 +647,12 @@ func encodeVarintErrorpb(dAtA []byte, offset int, v uint64) int {
 func (m *NotLeader) Size() (n int) {
 	var l int
 	_ = l
-	if m.RegionId != nil {
-		n += 1 + sovErrorpb(uint64(*m.RegionId))
+	if m.RegionId != 0 {
+		n += 1 + sovErrorpb(uint64(m.RegionId))
 	}
 	if m.Leader != nil {
 		l = m.Leader.Size()
 		n += 1 + l + sovErrorpb(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
 	}
 	return n
 }
@@ -672,20 +660,14 @@ func (m *NotLeader) Size() (n int) {
 func (m *StoreNotMatch) Size() (n int) {
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
 	return n
 }
 
 func (m *RegionNotFound) Size() (n int) {
 	var l int
 	_ = l
-	if m.RegionId != nil {
-		n += 1 + sovErrorpb(uint64(*m.RegionId))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
+	if m.RegionId != 0 {
+		n += 1 + sovErrorpb(uint64(m.RegionId))
 	}
 	return n
 }
@@ -693,23 +675,20 @@ func (m *RegionNotFound) Size() (n int) {
 func (m *KeyNotInRegion) Size() (n int) {
 	var l int
 	_ = l
-	if m.Key != nil {
-		l = len(m.Key)
+	l = len(m.Key)
+	if l > 0 {
 		n += 1 + l + sovErrorpb(uint64(l))
 	}
-	if m.RegionId != nil {
-		n += 1 + sovErrorpb(uint64(*m.RegionId))
+	if m.RegionId != 0 {
+		n += 1 + sovErrorpb(uint64(m.RegionId))
 	}
-	if m.StartKey != nil {
-		l = len(m.StartKey)
+	l = len(m.StartKey)
+	if l > 0 {
 		n += 1 + l + sovErrorpb(uint64(l))
 	}
-	if m.EndKey != nil {
-		l = len(m.EndKey)
+	l = len(m.EndKey)
+	if l > 0 {
 		n += 1 + l + sovErrorpb(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
 	}
 	return n
 }
@@ -723,17 +702,18 @@ func (m *StaleEpoch) Size() (n int) {
 			n += 1 + l + sovErrorpb(uint64(l))
 		}
 	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
 	return n
 }
 
 func (m *ServerIsBusy) Size() (n int) {
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
+	l = len(m.Reason)
+	if l > 0 {
+		n += 1 + l + sovErrorpb(uint64(l))
+	}
+	if m.BackoffMs != 0 {
+		n += 1 + sovErrorpb(uint64(m.BackoffMs))
 	}
 	return n
 }
@@ -741,23 +721,17 @@ func (m *ServerIsBusy) Size() (n int) {
 func (m *StaleCommand) Size() (n int) {
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
 	return n
 }
 
 func (m *RaftEntryTooLarge) Size() (n int) {
 	var l int
 	_ = l
-	if m.RegionId != nil {
-		n += 1 + sovErrorpb(uint64(*m.RegionId))
+	if m.RegionId != 0 {
+		n += 1 + sovErrorpb(uint64(m.RegionId))
 	}
-	if m.EntrySize != nil {
-		n += 1 + sovErrorpb(uint64(*m.EntrySize))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
+	if m.EntrySize != 0 {
+		n += 1 + sovErrorpb(uint64(m.EntrySize))
 	}
 	return n
 }
@@ -765,8 +739,8 @@ func (m *RaftEntryTooLarge) Size() (n int) {
 func (m *Error) Size() (n int) {
 	var l int
 	_ = l
-	if m.Message != nil {
-		l = len(*m.Message)
+	l = len(m.Message)
+	if l > 0 {
 		n += 1 + l + sovErrorpb(uint64(l))
 	}
 	if m.NotLeader != nil {
@@ -800,9 +774,6 @@ func (m *Error) Size() (n int) {
 	if m.RaftEntryTooLarge != nil {
 		l = m.RaftEntryTooLarge.Size()
 		n += 1 + l + sovErrorpb(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
 	}
 	return n
 }
@@ -853,7 +824,7 @@ func (m *NotLeader) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RegionId", wireType)
 			}
-			var v uint64
+			m.RegionId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowErrorpb
@@ -863,12 +834,11 @@ func (m *NotLeader) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= (uint64(b) & 0x7F) << shift
+				m.RegionId |= (uint64(b) & 0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.RegionId = &v
 		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Leader", wireType)
@@ -914,7 +884,6 @@ func (m *NotLeader) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -965,7 +934,6 @@ func (m *StoreNotMatch) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1008,7 +976,7 @@ func (m *RegionNotFound) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RegionId", wireType)
 			}
-			var v uint64
+			m.RegionId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowErrorpb
@@ -1018,12 +986,11 @@ func (m *RegionNotFound) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= (uint64(b) & 0x7F) << shift
+				m.RegionId |= (uint64(b) & 0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.RegionId = &v
 		default:
 			iNdEx = preIndex
 			skippy, err := skipErrorpb(dAtA[iNdEx:])
@@ -1036,7 +1003,6 @@ func (m *RegionNotFound) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1110,7 +1076,7 @@ func (m *KeyNotInRegion) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RegionId", wireType)
 			}
-			var v uint64
+			m.RegionId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowErrorpb
@@ -1120,12 +1086,11 @@ func (m *KeyNotInRegion) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= (uint64(b) & 0x7F) << shift
+				m.RegionId |= (uint64(b) & 0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.RegionId = &v
 		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field StartKey", wireType)
@@ -1200,7 +1165,6 @@ func (m *KeyNotInRegion) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1282,7 +1246,6 @@ func (m *StaleEpoch) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1321,6 +1284,54 @@ func (m *ServerIsBusy) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: ServerIsBusy: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Reason", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowErrorpb
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthErrorpb
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Reason = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BackoffMs", wireType)
+			}
+			m.BackoffMs = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowErrorpb
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.BackoffMs |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipErrorpb(dAtA[iNdEx:])
@@ -1333,7 +1344,6 @@ func (m *ServerIsBusy) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1384,7 +1394,6 @@ func (m *StaleCommand) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1427,7 +1436,7 @@ func (m *RaftEntryTooLarge) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field RegionId", wireType)
 			}
-			var v uint64
+			m.RegionId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowErrorpb
@@ -1437,17 +1446,16 @@ func (m *RaftEntryTooLarge) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= (uint64(b) & 0x7F) << shift
+				m.RegionId |= (uint64(b) & 0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.RegionId = &v
 		case 2:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field EntrySize", wireType)
 			}
-			var v uint64
+			m.EntrySize = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowErrorpb
@@ -1457,12 +1465,11 @@ func (m *RaftEntryTooLarge) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= (uint64(b) & 0x7F) << shift
+				m.EntrySize |= (uint64(b) & 0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.EntrySize = &v
 		default:
 			iNdEx = preIndex
 			skippy, err := skipErrorpb(dAtA[iNdEx:])
@@ -1475,7 +1482,6 @@ func (m *RaftEntryTooLarge) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1541,8 +1547,7 @@ func (m *Error) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			s := string(dAtA[iNdEx:postIndex])
-			m.Message = &s
+			m.Message = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
@@ -1820,7 +1825,6 @@ func (m *Error) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}
@@ -1938,39 +1942,43 @@ var (
 func init() { proto.RegisterFile("errorpb.proto", fileDescriptorErrorpb) }
 
 var fileDescriptorErrorpb = []byte{
-	// 539 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0x7c, 0x93, 0x51, 0x6f, 0xd3, 0x30,
-	0x10, 0xc7, 0xd9, 0xda, 0xb5, 0xcd, 0xb5, 0xcd, 0x5a, 0x33, 0x58, 0x54, 0xc4, 0x84, 0x22, 0x1e,
-	0x78, 0xa1, 0x13, 0x13, 0x4f, 0x20, 0x90, 0x28, 0x2a, 0x52, 0xb5, 0x31, 0x90, 0xcb, 0x7b, 0x94,
-	0x35, 0xb7, 0xae, 0x5a, 0x63, 0x57, 0xb6, 0x0b, 0x2a, 0x5f, 0x04, 0x3e, 0x12, 0x8f, 0x7c, 0x04,
-	0x04, 0x5f, 0x04, 0xfb, 0x92, 0xb6, 0x49, 0x1f, 0xf6, 0x10, 0xc9, 0x77, 0xe7, 0xff, 0xdf, 0xf6,
-	0xfd, 0x2e, 0xd0, 0x46, 0xa5, 0xa4, 0x5a, 0x5c, 0xf5, 0x17, 0x4a, 0x1a, 0xc9, 0xea, 0x79, 0xd8,
-	0x6b, 0xa5, 0x68, 0xe2, 0x75, 0xba, 0x77, 0x34, 0x95, 0x53, 0x49, 0xcb, 0x53, 0xb7, 0xca, 0xb2,
-	0xe1, 0x25, 0x78, 0x97, 0xd2, 0x5c, 0x60, 0x9c, 0xa0, 0x62, 0x8f, 0xc0, 0x53, 0x38, 0x9d, 0x49,
-	0x11, 0xcd, 0x92, 0x60, 0xef, 0xc9, 0xde, 0xb3, 0x2a, 0x6f, 0x64, 0x89, 0x51, 0xc2, 0x9e, 0x42,
-	0x6d, 0x4e, 0xdb, 0x82, 0x7d, 0x5b, 0x69, 0x9e, 0xb5, 0xfa, 0xb9, 0xfd, 0x67, 0x44, 0xc5, 0xf3,
-	0x5a, 0x78, 0x08, 0xed, 0xb1, 0x91, 0x0a, 0xad, 0xe9, 0xc7, 0xd8, 0x4c, 0x6e, 0xc2, 0xe7, 0xe0,
-	0x73, 0xb2, 0xb0, 0x99, 0x0f, 0x72, 0x29, 0x92, 0x3b, 0x4f, 0x09, 0x97, 0xe0, 0x9f, 0xe3, 0xca,
-	0xee, 0x1d, 0x89, 0x4c, 0xc6, 0x3a, 0x50, 0xb9, 0xc5, 0x15, 0x6d, 0x6c, 0x71, 0xb7, 0x2c, 0x1b,
-	0xec, 0xef, 0x5c, 0xd3, 0x16, 0xb5, 0x89, 0x95, 0x89, 0x9c, 0xa8, 0x42, 0xa2, 0x06, 0x25, 0xac,
-	0x2d, 0x3b, 0x86, 0x3a, 0x8a, 0x84, 0x4a, 0x55, 0x2a, 0xd5, 0x6c, 0x68, 0x0b, 0xe1, 0x1b, 0x80,
-	0xb1, 0x89, 0xe7, 0x38, 0x5c, 0xc8, 0xc9, 0x0d, 0x3b, 0x85, 0xa6, 0xc0, 0x6f, 0x51, 0xe6, 0xa9,
-	0xed, 0xd1, 0x15, 0xfb, 0x5e, 0x7f, 0xfd, 0xde, 0xec, 0x5e, 0x1c, 0xec, 0x96, 0x6c, 0xa9, 0x43,
-	0x1f, 0x5a, 0x63, 0x54, 0x5f, 0x51, 0x8d, 0xf4, 0x60, 0xa9, 0x57, 0x14, 0x3b, 0xbb, 0xf7, 0x32,
-	0x4d, 0x63, 0x91, 0x84, 0x9f, 0xa0, 0xcb, 0xe3, 0x6b, 0x33, 0x14, 0x46, 0xad, 0xbe, 0x48, 0x79,
-	0x11, 0xab, 0x29, 0xde, 0xdd, 0xed, 0xc7, 0x00, 0xe8, 0x76, 0x47, 0x7a, 0xf6, 0x1d, 0xf3, 0x47,
-	0x7a, 0x94, 0x19, 0xdb, 0x44, 0xf8, 0xa3, 0x0a, 0x07, 0x43, 0x87, 0x99, 0x05, 0x50, 0x4f, 0x51,
-	0xeb, 0x78, 0x8a, 0xe4, 0xe1, 0xf1, 0x75, 0xc8, 0x5e, 0x00, 0x08, 0x69, 0xa2, 0x12, 0x34, 0xd6,
-	0x5f, 0xcf, 0xca, 0x86, 0x3a, 0xf7, 0xc4, 0x66, 0x00, 0xde, 0x41, 0x27, 0xbf, 0x92, 0x53, 0x5e,
-	0x3b, 0x5c, 0xd4, 0xc3, 0xe6, 0xd9, 0xf1, 0x46, 0x58, 0xa6, 0xc9, 0x7d, 0x55, 0xa6, 0x3b, 0x80,
-	0xae, 0x6d, 0x2f, 0xe9, 0x67, 0x22, 0x6f, 0x21, 0x35, 0xbb, 0xe8, 0x51, 0x46, 0xcc, 0xfd, 0xdb,
-	0x32, 0xf2, 0x97, 0xd0, 0xd4, 0xae, 0x7d, 0x11, 0x3a, 0x1c, 0xc1, 0x01, 0xa9, 0xef, 0x6f, 0xd4,
-	0x5b, 0x52, 0x1c, 0xf4, 0x96, 0xda, 0x6b, 0xf0, 0x35, 0x41, 0x88, 0x66, 0x3a, 0xba, 0xb2, 0x18,
-	0x82, 0x1a, 0x09, 0x1f, 0x6c, 0x85, 0x05, 0x46, 0xbc, 0xa5, 0x0b, 0x11, 0x7b, 0x05, 0xed, 0xec,
-	0xc8, 0x49, 0x86, 0x2c, 0xa8, 0xef, 0x6a, 0x0b, 0x3c, 0xad, 0xb6, 0x10, 0xb1, 0xb7, 0x70, 0xa8,
-	0xdd, 0xcc, 0xd3, 0xa3, 0x53, 0x37, 0xf5, 0x41, 0x83, 0xd4, 0x0f, 0x0b, 0xea, 0xc2, 0x3f, 0xc1,
-	0xdb, 0xba, 0x18, 0xb2, 0x73, 0x38, 0x52, 0x76, 0x3a, 0xa2, 0x0c, 0xb8, 0x91, 0x32, 0x9a, 0xbb,
-	0x01, 0x09, 0x3c, 0x32, 0xe9, 0x6d, 0x3b, 0xbf, 0x3b, 0x42, 0xbc, 0xab, 0x76, 0x53, 0x83, 0xce,
-	0xaf, 0xbf, 0x27, 0x7b, 0xbf, 0xed, 0xf7, 0xc7, 0x7e, 0x3f, 0xff, 0x9d, 0xdc, 0xfb, 0x1f, 0x00,
-	0x00, 0xff, 0xff, 0x5a, 0xc1, 0x87, 0xa1, 0x1f, 0x04, 0x00, 0x00,
+	// 604 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x7c, 0x54, 0xdd, 0x6e, 0xd3, 0x30,
+	0x14, 0x26, 0xfb, 0x69, 0x97, 0xd3, 0x34, 0xdb, 0xcc, 0xd8, 0xa2, 0x4d, 0xab, 0xa6, 0x88, 0x8b,
+	0x09, 0x89, 0x4e, 0x0c, 0xae, 0x40, 0x20, 0x31, 0x54, 0xa4, 0xa9, 0x5b, 0x41, 0x2e, 0xf7, 0x91,
+	0xdb, 0x9c, 0x76, 0x51, 0x17, 0xbb, 0xb2, 0xdd, 0x4d, 0xd9, 0x8b, 0xc0, 0x23, 0x71, 0xc9, 0x23,
+	0xa0, 0xf1, 0x22, 0xc8, 0x4e, 0xda, 0x26, 0xbd, 0xd8, 0x55, 0xce, 0x39, 0xf6, 0x77, 0xfc, 0xf9,
+	0x7c, 0x9f, 0x03, 0x4d, 0x94, 0x52, 0xc8, 0xe9, 0xa0, 0x3d, 0x95, 0x42, 0x0b, 0x52, 0x2f, 0xd2,
+	0x43, 0x2f, 0x45, 0xcd, 0xe6, 0xe5, 0xc3, 0xbd, 0xb1, 0x18, 0x0b, 0x1b, 0x9e, 0x99, 0x28, 0xaf,
+	0x86, 0x3d, 0x70, 0x7b, 0x42, 0x5f, 0x21, 0x8b, 0x51, 0x92, 0x23, 0x70, 0x25, 0x8e, 0x13, 0xc1,
+	0xa3, 0x24, 0x0e, 0x9c, 0x13, 0xe7, 0x74, 0x83, 0x6e, 0xe5, 0x85, 0xcb, 0x98, 0xbc, 0x84, 0xda,
+	0xad, 0xdd, 0x16, 0xac, 0x9d, 0x38, 0xa7, 0x8d, 0x73, 0xaf, 0x5d, 0xb4, 0xff, 0x8e, 0x28, 0x69,
+	0xb1, 0x16, 0x6e, 0x43, 0xb3, 0xaf, 0x85, 0xc4, 0x9e, 0xd0, 0xd7, 0x4c, 0x0f, 0x6f, 0xc2, 0xd7,
+	0xe0, 0x53, 0xdb, 0xa2, 0x27, 0xf4, 0x57, 0x31, 0xe3, 0xf1, 0x93, 0xa7, 0x84, 0x33, 0xf0, 0xbb,
+	0x98, 0xf5, 0x84, 0xbe, 0xe4, 0x39, 0x8c, 0xec, 0xc0, 0xfa, 0x04, 0x33, 0xbb, 0xd1, 0xa3, 0x26,
+	0xac, 0x36, 0x58, 0x5b, 0xa1, 0x79, 0x04, 0xae, 0xd2, 0x4c, 0xea, 0xc8, 0x80, 0xd6, 0x2d, 0x68,
+	0xcb, 0x16, 0xba, 0x98, 0x91, 0x03, 0xa8, 0x23, 0x8f, 0xed, 0xd2, 0x86, 0x5d, 0xaa, 0x21, 0x8f,
+	0xbb, 0x98, 0x85, 0x1f, 0x01, 0xfa, 0x9a, 0xdd, 0x62, 0x67, 0x2a, 0x86, 0x37, 0xe4, 0x0c, 0x1a,
+	0x1c, 0xef, 0xa3, 0xbc, 0xa7, 0x0a, 0x9c, 0x93, 0xf5, 0xd3, 0xc6, 0xb9, 0x3f, 0xbf, 0x6f, 0xce,
+	0x8b, 0x02, 0xc7, 0xfb, 0x3c, 0x54, 0x61, 0x07, 0xbc, 0x3e, 0xca, 0x3b, 0x94, 0x97, 0xea, 0x62,
+	0xa6, 0x32, 0xb2, 0x0f, 0x35, 0x89, 0x4c, 0x09, 0x6e, 0x69, 0xbb, 0xb4, 0xc8, 0xc8, 0x31, 0xc0,
+	0x80, 0x0d, 0x27, 0x62, 0x34, 0x8a, 0x52, 0x55, 0x50, 0x77, 0x8b, 0xca, 0xb5, 0x0a, 0x7d, 0xf0,
+	0x2c, 0x8b, 0x2f, 0x22, 0x4d, 0x19, 0x8f, 0xc3, 0x6f, 0xb0, 0x4b, 0xd9, 0x48, 0x77, 0xb8, 0x96,
+	0xd9, 0x0f, 0x21, 0xae, 0x98, 0x1c, 0xe3, 0xd3, 0x22, 0x1d, 0x03, 0xa0, 0xd9, 0x1d, 0xa9, 0xe4,
+	0x01, 0xe7, 0x07, 0xd8, 0x4a, 0x3f, 0x79, 0xc0, 0xf0, 0xe7, 0x06, 0x6c, 0x76, 0x8c, 0x3b, 0x48,
+	0x00, 0xf5, 0x14, 0x95, 0x62, 0x63, 0x2c, 0x28, 0xce, 0x53, 0xf2, 0x06, 0x80, 0x0b, 0x1d, 0x55,
+	0xb4, 0x26, 0xed, 0xb9, 0xc5, 0x16, 0x66, 0xa1, 0x2e, 0x5f, 0xf8, 0xe6, 0x33, 0xec, 0x14, 0x94,
+	0x0c, 0x72, 0x64, 0x54, 0xb6, 0xa3, 0x6f, 0x9c, 0x1f, 0x2c, 0x80, 0x55, 0x13, 0x50, 0x5f, 0x56,
+	0x4d, 0x71, 0x01, 0xbb, 0x13, 0xcc, 0x2c, 0x3e, 0xe1, 0xc5, 0xe4, 0xad, 0x46, 0xe5, 0x1e, 0x55,
+	0x67, 0x50, 0x7f, 0x52, 0x75, 0xca, 0x3b, 0x68, 0x28, 0x33, 0xbe, 0x08, 0x8d, 0x8a, 0xc1, 0xa6,
+	0x45, 0x3f, 0x5f, 0xa0, 0x97, 0x02, 0x53, 0x50, 0x4b, 0xb1, 0x3f, 0x80, 0xaf, 0xac, 0x76, 0x51,
+	0xa2, 0xa2, 0xc1, 0x4c, 0x65, 0x41, 0xcd, 0x02, 0x5f, 0x2c, 0x81, 0x25, 0x69, 0xa9, 0xa7, 0xca,
+	0x42, 0xbf, 0x87, 0x66, 0x7e, 0xe4, 0x30, 0x97, 0x2c, 0xa8, 0xaf, 0x62, 0x4b, 0x7a, 0x52, 0x4f,
+	0x95, 0x32, 0xf2, 0x09, 0xb6, 0x95, 0x79, 0x2a, 0xf6, 0xd2, 0xa9, 0x79, 0x2c, 0xc1, 0x96, 0x45,
+	0xef, 0x97, 0xd0, 0xa5, 0xa7, 0x44, 0x9b, 0xaa, 0x9c, 0x92, 0x2e, 0xec, 0x49, 0x36, 0xd2, 0x51,
+	0x2e, 0xb8, 0x16, 0x22, 0xba, 0x35, 0x06, 0x09, 0x5c, 0xdb, 0xe4, 0x70, 0x39, 0xf9, 0x55, 0x0b,
+	0xd1, 0x5d, 0xb9, 0x5a, 0xba, 0x78, 0xf5, 0xfb, 0xb1, 0xe5, 0xfc, 0x79, 0x6c, 0x39, 0x7f, 0x1f,
+	0x5b, 0xce, 0xaf, 0x7f, 0xad, 0x67, 0x10, 0x0c, 0x45, 0xda, 0x9e, 0x26, 0x7c, 0x3c, 0x64, 0xd3,
+	0xb6, 0x4e, 0x26, 0x77, 0xed, 0xc9, 0x9d, 0xfd, 0x67, 0x0c, 0x6a, 0xf6, 0xf3, 0xf6, 0x7f, 0x00,
+	0x00, 0x00, 0xff, 0xff, 0x6f, 0xa9, 0xa3, 0xe6, 0x78, 0x04, 0x00, 0x00,
 }
