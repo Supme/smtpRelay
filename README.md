@@ -1,6 +1,8 @@
 # smtpRelay
 small SMTP relay
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/Supme/smtpRelay)](https://goreportcard.com/report/github.com/Supme/smtpRelay)
+
 [Download binary](https://github.com/Supme/smtpRelay/releases)
 
 example config.ini
