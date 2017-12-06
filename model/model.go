@@ -2,10 +2,10 @@ package model
 
 import (
 	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mssql" // MSSQL driver
-	_ "github.com/jinzhu/gorm/dialects/mysql" // MySQL driver
+	_ "github.com/jinzhu/gorm/dialects/mssql"    // MSSQL driver
+	_ "github.com/jinzhu/gorm/dialects/mysql"    // MySQL driver
 	_ "github.com/jinzhu/gorm/dialects/postgres" // Postgres driver
-	_ "github.com/jinzhu/gorm/dialects/sqlite" // SQLite driver
+	_ "github.com/jinzhu/gorm/dialects/sqlite"   // SQLite driver
 	"github.com/sfreiberg/go-smtpd/smtpd"
 	"strings"
 	"time"
