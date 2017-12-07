@@ -1,12 +1,14 @@
 package model
 
 import (
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mssql"    // MSSQL driver
-	_ "github.com/jinzhu/gorm/dialects/mysql"    // MySQL driver
-	_ "github.com/jinzhu/gorm/dialects/postgres" // Postgres driver
-	_ "github.com/jinzhu/gorm/dialects/sqlite"   // SQLite driver
+	"encoding/base64"
+	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
+	_ "github.com/go-sql-driver/mysql"   // MySQL driver
+	"github.com/go-xorm/xorm"
+	_ "github.com/lib/pq"           // Postgres driver
+	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"github.com/sfreiberg/go-smtpd/smtpd"
+	"log"
 	"strings"
 	"time"
 )
@@ -30,91 +32,106 @@ var Config struct {
 
 var (
 	// QueueDb queue db connection
-	QueueDb *gorm.DB
+	QueueDb *xorm.Engine
 	// StatusDb status db connection
-	StatusDb *gorm.DB
+	StatusDb *xorm.Engine
 )
 
 // Queue queue email model
 type Queue struct {
-	ID           uint `gorm:"primary_key"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID           uint64    `xorm:"serial pk autoincr 'id'"`
+	CreatedAt    time.Time `xorm:"created"`
+	UpdatedAt    time.Time `xorm:"updated"`
 	MessageType  string
-	MessageID    string
+	MessageID    string `xorm:"'message_id'"`
 	From         string
 	FromHostname string
 	Rcpt         string
 	RcptHostname string
-	Data         []byte
+	Data         string `xorm:"LONGTEXT 'data'"`
 	Repeat       uint
-	LaterStatus  string
+	LaterStatus  string `xorm:"MEDIUMTEXT 'later_status'"`
 }
 
 type status struct {
-	ID          uint `gorm:"primary_key"`
+	ID          uint64 `xorm:"BIGSERIAL pk autoincr 'id'"`
 	QueuedAt    time.Time
-	SendingAt   time.Time
+	SendingAt   time.Time `xorm:"created"`
 	From        string
 	Rcpt        string
 	MessageType string
-	MessageID   string
-	Status      string
+	MessageID   string `xorm:"'message_id'"`
+	Status      string `xorm:"MEDIUMTEXT 'status'"`
 }
 
 // OpenQueueDb open queue database
 func OpenQueueDb() (err error) {
-	QueueDb, err = gorm.Open(Config.QueueDbDialect, Config.QueueDbConnect)
+	QueueDb, err = xorm.NewEngine(Config.StatusDbDialect, Config.StatusDbConnect)
 	if err != nil {
 		return
 	}
-	QueueDb.LogMode(Config.Debug)
-	QueueDb.AutoMigrate(&Queue{})
-	return
+	QueueDb.ShowSQL(Config.Debug)
+	err = QueueDb.Sync2(new(Queue))
+	return err
 }
 
 // OpenStatusDb open status database
 func OpenStatusDb() (err error) {
-	StatusDb, err = gorm.Open(Config.StatusDbDialect, Config.StatusDbConnect)
+	StatusDb, err = xorm.NewEngine(Config.StatusDbDialect, Config.StatusDbConnect)
 	if err != nil {
 		return
 	}
-	StatusDb.LogMode(Config.Debug)
-	StatusDb.AutoMigrate(&status{})
-	return
+	StatusDb.ShowSQL(Config.Debug)
+	err = StatusDb.Sync2(new(status))
+	return err
 }
 
 // AddToQueue add email to queue
-func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) {
+func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []smtpd.MailAddress, data []byte) error {
+	session := QueueDb.NewSession()
+	defer session.Close()
+	if err := session.Begin(); err != nil {
+		log.Println(err)
+		return err
+	}
 	for _, rcpt := range rcpts {
-		// ToDo fix error mssql IDENTITY_INSERT
-		QueueDb.Create(&Queue{
+		if _, err := session.InsertOne(&Queue{
 			MessageType:  messageType,
 			MessageID:    messageID,
 			From:         from.Email(),
 			FromHostname: from.Hostname(),
 			Rcpt:         rcpt.Email(),
 			RcptHostname: rcpt.Hostname(),
-			Data:         data,
-		})
+			Data:         base64.StdEncoding.EncodeToString(data),
+		}); err != nil {
+			log.Println(err)
+			session.Rollback()
+			return err
+		}
 	}
+	return session.Commit()
 }
 
 // GetRepeatQueue get `limit` number emails for resend
 func GetRepeatQueue(limit uint) []Queue {
 	var emails []Queue
-	QueueDb.Where("updated_at < ? AND repeat > 0", time.Now().Local().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
+	if err := QueueDb.Where("updated_at < ? AND repeat > 0",
+		time.Now().Local().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
 		Limit(int(limit)).
-		Find(&emails)
+		Find(&emails); err != nil {
+		log.Print(err)
+	}
 	return emails
 }
 
 // GetNewQueue get `limit` number new emails
 func GetNewQueue(limit uint) []Queue {
 	var emails []Queue
-	QueueDb.Where("repeat=0").
+	if err := QueueDb.Where("repeat=0").
 		Limit(int(limit)).
-		Find(&emails)
+		Find(&emails); err != nil {
+		log.Print(err)
+	}
 	return emails
 }
 
@@ -125,7 +142,13 @@ func SetStatus(email *Queue) {
 		setStatus(email)
 	} else {
 		if strings.HasPrefix(email.LaterStatus, "4") {
-			QueueDb.Model(&Queue{ID: email.ID}).UpdateColumns(Queue{Repeat: email.Repeat, LaterStatus: email.LaterStatus, UpdatedAt: time.Now()})
+			if _, err := QueueDb.Table(new(Queue)).
+				ID(email.ID).Update(&Queue{
+				Repeat:      email.Repeat,
+				LaterStatus: email.LaterStatus,
+			}); err != nil {
+				log.Print(err)
+			}
 		} else {
 			setStatus(email)
 		}
@@ -133,28 +156,18 @@ func SetStatus(email *Queue) {
 }
 
 func setStatus(email *Queue) {
-	//if err := StatusDb.Create(&status{
-	//	QueuedAt:    email.CreatedAt,
-	//	SendingAt:   time.Now(),
-	//	From:        email.From,
-	//	Rcpt:        email.Rcpt,
-	//	MessageType: email.MessageType,
-	//	MessageID:   email.MessageID,
-	//	Status:      email.LaterStatus,
-	//}).Error; err != nil {
-	//	log.Print(err)
-	//}
-	// ERROR mssql: Для столбца идентификаторов таблицы "statuses" явное значение необходимо указывать в тех случаях, когда либо IDENTITY_INSERT имеет значение ON, либо когда пользователь репликации осуществляет вставку в столбец идентификаторов, отмеченный как NOT FOR REPLICATION.
-	StatusDb.Exec(
-		`INSERT INTO "statuses" ("queued_at","sending_at","from","rcpt","message_type","message_id","status") VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		email.CreatedAt,
-		time.Now(),
-		email.From,
-		email.Rcpt,
-		email.MessageType,
-		email.MessageID,
-		email.LaterStatus,
-	)
-
-	QueueDb.Delete(&Queue{ID: email.ID})
+	if _, err := StatusDb.InsertOne(&status{
+		QueuedAt:    email.CreatedAt,
+		SendingAt:   time.Now(),
+		From:        email.From,
+		Rcpt:        email.Rcpt,
+		MessageType: email.MessageType,
+		MessageID:   email.MessageID,
+		Status:      email.LaterStatus,
+	}); err != nil {
+		log.Print(err)
+	}
+	if _, err := QueueDb.Delete(&Queue{ID: email.ID}); err != nil {
+		log.Print(err)
+	}
 }

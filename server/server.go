@@ -44,11 +44,18 @@ func (e *env) Write(line []byte) error {
 		e.messageType = string(t[1])
 	}
 	_, err := e.data.Write(line)
-	return err
+	if err != nil {
+		return smtpd.SMTPError("550 " + err.Error())
+	}
+	return nil
 }
 
 func (e *env) Close() error {
-	model.AddToQueue(e.messageType, e.messageID, e.from, e.rcpts, e.data.Bytes())
+	err := model.AddToQueue(e.messageType, e.messageID, e.from, e.rcpts, e.data.Bytes())
+	e.data.Reset()
+	if err != nil {
+		return smtpd.SMTPError("452 Internal server error")
+	}
 	return nil
 }
 

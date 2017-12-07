@@ -37,39 +37,42 @@ package server
 import (
 	"bufio"
 	"io"
+	"net"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/mysql"
 )
 
-const defaultWriterSize = 16 * 1024
+const (
+	defaultReaderSize = 16 * 1024
+	defaultWriterSize = 16 * 1024
+)
 
 // packetIO is a helper to read and write data in packet format.
 type packetIO struct {
-	bufReadConn *bufferedReadConn
-	bufWriter   *bufio.Writer
-	sequence    uint8
+	rb *bufio.Reader
+	wb *bufio.Writer
+
+	sequence uint8
 }
 
-func newPacketIO(bufReadConn *bufferedReadConn) *packetIO {
-	p := &packetIO{sequence: 0}
-	p.setBufferedReadConn(bufReadConn)
+func newPacketIO(conn net.Conn) *packetIO {
+	p := &packetIO{
+		rb: bufio.NewReaderSize(conn, defaultReaderSize),
+		wb: bufio.NewWriterSize(conn, defaultWriterSize),
+	}
+
 	return p
-}
-
-func (p *packetIO) setBufferedReadConn(bufReadConn *bufferedReadConn) {
-	p.bufReadConn = bufReadConn
-	p.bufWriter = bufio.NewWriterSize(bufReadConn, defaultWriterSize)
 }
 
 func (p *packetIO) readOnePacket() ([]byte, error) {
 	var header [4]byte
 
-	if _, err := io.ReadFull(p.bufReadConn, header[:]); err != nil {
+	if _, err := io.ReadFull(p.rb, header[:]); err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	sequence := header[3]
+	sequence := uint8(header[3])
 	if sequence != p.sequence {
 		return nil, errInvalidSequence.Gen("invalid sequence %d != %d", sequence, p.sequence)
 	}
@@ -79,7 +82,7 @@ func (p *packetIO) readOnePacket() ([]byte, error) {
 	length := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 
 	data := make([]byte, length)
-	if _, err := io.ReadFull(p.bufReadConn, data); err != nil {
+	if _, err := io.ReadFull(p.rb, data); err != nil {
 		return nil, errors.Trace(err)
 	}
 	return data, nil
@@ -123,7 +126,7 @@ func (p *packetIO) writePacket(data []byte) error {
 
 		data[3] = p.sequence
 
-		if n, err := p.bufWriter.Write(data[:4+mysql.MaxPayloadLen]); err != nil {
+		if n, err := p.wb.Write(data[:4+mysql.MaxPayloadLen]); err != nil {
 			return mysql.ErrBadConn
 		} else if n != (4 + mysql.MaxPayloadLen) {
 			return mysql.ErrBadConn
@@ -139,7 +142,7 @@ func (p *packetIO) writePacket(data []byte) error {
 	data[2] = byte(length >> 16)
 	data[3] = p.sequence
 
-	if n, err := p.bufWriter.Write(data); err != nil {
+	if n, err := p.wb.Write(data); err != nil {
 		return errors.Trace(mysql.ErrBadConn)
 	} else if n != len(data) {
 		return errors.Trace(mysql.ErrBadConn)
@@ -150,5 +153,5 @@ func (p *packetIO) writePacket(data []byte) error {
 }
 
 func (p *packetIO) flush() error {
-	return p.bufWriter.Flush()
+	return p.wb.Flush()
 }

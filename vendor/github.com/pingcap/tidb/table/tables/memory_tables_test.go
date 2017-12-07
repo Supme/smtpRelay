@@ -21,10 +21,11 @@ import (
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/store/tikv"
+	"github.com/pingcap/tidb/store/localstore"
+	"github.com/pingcap/tidb/store/localstore/goleveldb"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/table/tables"
-	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/types"
 )
 
 var _ = Suite(&testMemoryTableSuite{})
@@ -36,10 +37,11 @@ type testMemoryTableSuite struct {
 }
 
 func (ts *testMemoryTableSuite) SetUpSuite(c *C) {
-	store, err := tikv.NewMockTikvStore()
+	driver := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
+	store, err := driver.Open("memory")
 	c.Check(err, IsNil)
 	ts.store = store
-	ts.se, err = tidb.CreateSession4Test(ts.store)
+	ts.se, err = tidb.CreateSession(ts.store)
 	c.Assert(err, IsNil)
 
 	// create table
@@ -60,14 +62,12 @@ func (ts *testMemoryTableSuite) SetUpSuite(c *C) {
 	}
 
 	tblInfo := &model.TableInfo{
-		ID:         100,
-		Name:       model.NewCIStr("t"),
-		Columns:    []*model.ColumnInfo{col1, col2},
-		PKIsHandle: true,
+		ID:      100,
+		Name:    model.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{col1, col2},
 	}
-	tblInfo.Columns[0].Flag |= mysql.PriKeyFlag
 	alloc := autoid.NewMemoryAllocator(int64(10))
-	ts.tbl = tables.MemoryTableFromMeta(alloc, tblInfo)
+	ts.tbl, _ = tables.MemoryTableFromMeta(alloc, tblInfo)
 }
 
 func (ts *testMemoryTableSuite) TestMemoryBasic(c *C) {
@@ -80,40 +80,20 @@ func (ts *testMemoryTableSuite) TestMemoryBasic(c *C) {
 	c.Assert(string(tb.FirstKey()), Not(Equals), "")
 	c.Assert(string(tb.RecordPrefix()), Not(Equals), "")
 
-	// Basic test for MemoryTable
-	handle, found, err := tb.Seek(nil, 0)
-	c.Assert(handle, Equals, int64(0))
-	c.Assert(found, Equals, false)
-	c.Assert(err, IsNil)
-	cols := tb.WritableCols()
-	c.Assert(cols, NotNil)
-
-	key := tb.IndexPrefix()
-	c.Assert(key, IsNil)
-	err = tb.UpdateRecord(nil, 0, nil, nil, nil)
-	c.Assert(err, NotNil)
-	alc := tb.Allocator(nil)
-	c.Assert(alc, NotNil)
-	err = tb.RebaseAutoID(nil, 0, false)
-	c.Assert(err, IsNil)
-
-	autoid, err := tb.AllocAutoID(nil)
+	autoid, err := tb.AllocAutoID()
 	c.Assert(err, IsNil)
 	c.Assert(autoid, Greater, int64(0))
 
-	rid, err := tb.AddRecord(ctx, types.MakeDatums(1, "abc"), false)
+	rid, err := tb.AddRecord(ctx, types.MakeDatums(1, "abc"))
 	c.Assert(err, IsNil)
 	row, err := tb.Row(ctx, rid)
 	c.Assert(err, IsNil)
 	c.Assert(len(row), Equals, 2)
 	c.Assert(row[0].GetInt64(), Equals, int64(1))
 
-	_, err = tb.AddRecord(ctx, types.MakeDatums(1, "aba"), false)
-	c.Assert(err, NotNil)
-	_, err = tb.AddRecord(ctx, types.MakeDatums(2, "abc"), false)
+	_, err = tb.AddRecord(ctx, types.MakeDatums(1, "aba"))
 	c.Assert(err, IsNil)
-
-	err = tb.UpdateRecord(ctx, 1, types.MakeDatums(1, "abc"), types.MakeDatums(3, "abe"), nil)
+	_, err = tb.AddRecord(ctx, types.MakeDatums(2, "abc"))
 	c.Assert(err, IsNil)
 
 	tb.IterRecords(ctx, tb.FirstKey(), tb.Cols(), func(h int64, data []types.Datum, cols []*table.Column) (bool, error) {
@@ -124,15 +104,15 @@ func (ts *testMemoryTableSuite) TestMemoryBasic(c *C) {
 	vals, err := tb.RowWithCols(ctx, rid, tb.Cols())
 	c.Assert(err, IsNil)
 	c.Assert(vals, HasLen, 2)
-	c.Assert(vals[0].GetInt64(), Equals, int64(3))
-	cols = []*table.Column{tb.Cols()[1]}
+	c.Assert(vals[0].GetInt64(), Equals, int64(1))
+	cols := []*table.Column{tb.Cols()[1]}
 	vals, err = tb.RowWithCols(ctx, rid, cols)
 	c.Assert(err, IsNil)
 	c.Assert(vals, HasLen, 1)
-	c.Assert(vals[0].GetString(), Equals, "abe")
+	c.Assert(vals[0].GetString(), Equals, "abc")
 
 	c.Assert(tb.RemoveRecord(ctx, rid, types.MakeDatums(1, "cba")), IsNil)
-	_, err = tb.AddRecord(ctx, types.MakeDatums(1, "abc"), false)
+	_, err = tb.AddRecord(ctx, types.MakeDatums(1, "abc"))
 	c.Assert(err, IsNil)
 	tb.(*tables.MemoryTable).Truncate()
 	_, err = tb.Row(ctx, rid)

@@ -16,7 +16,7 @@ package codec
 import (
 	"testing"
 
-	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/types"
 )
 
 var valueCnt = 100

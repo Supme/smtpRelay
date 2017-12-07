@@ -13,7 +13,7 @@
 
 package ast
 
-import "github.com/pingcap/tidb/types"
+import "github.com/pingcap/tidb/util/types"
 
 // node is the struct implements node interface except for Accept method.
 // Node implementations should embed it in.
@@ -58,7 +58,7 @@ type dmlNode struct {
 // dmlStatement implements DMLNode interface.
 func (dn *dmlNode) dmlStatement() {}
 
-// exprNode is the struct implements Expression interface.
+// expressionNode is the struct implements Expression interface.
 // Expression implementations should embed it in.
 type exprNode struct {
 	node
@@ -101,9 +101,19 @@ type funcNode struct {
 	exprNode
 }
 
-// functionExpression implements FunctionNode interface.
+// FunctionExpression implements FunctionNode interface.
 func (fn *funcNode) functionExpression() {}
 
 type resultSetNode struct {
 	resultFields []*ResultField
+}
+
+// GetResultFields implements ResultSetNode interface.
+func (rs *resultSetNode) GetResultFields() []*ResultField {
+	return rs.resultFields
+}
+
+// GetResultFields implements ResultSetNode interface.
+func (rs *resultSetNode) SetResultFields(rfs []*ResultField) {
+	rs.resultFields = rfs
 }

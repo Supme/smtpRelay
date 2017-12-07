@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"encoding/base64"
 	"github.com/supme/directEmail"
 	"github.com/supme/smtpRelay/model"
 	"sync"
@@ -35,24 +36,33 @@ func resendQueue() {
 	}
 }
 
+func stringToByte(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
 func send(emails []model.Queue) {
 	var wg sync.WaitGroup
 	for i := range emails {
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, email model.Queue) {
+			defer wg.Done()
+			dataByte, err := stringToByte(email.Data)
+			if err != nil {
+				email.LaterStatus = "550 " + err.Error()
+				return
+			}
 			sender := directEmail.New()
 			sender.Host = model.Config.Hostname
 			sender.FromEmail = email.From
 			sender.ToEmail = email.Rcpt
-			sender.SetRawMessageBytes(email.Data)
-			err := sender.Send()
+			sender.SetRawMessageBytes(dataByte)
+			err = sender.Send()
 			if err != nil {
 				email.LaterStatus = err.Error()
 			} else {
 				email.LaterStatus = "250 2.0.0 Ok"
 			}
 			model.SetStatus(&email)
-			wg.Done()
 		}(&wg, emails[i])
 	}
 	wg.Wait()

@@ -5,6 +5,7 @@
 package simplifiedchinese
 
 import (
+	"errors"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
@@ -30,6 +31,8 @@ func hzGB2312NewEncoder() transform.Transformer {
 	return new(hzGB2312Encoder)
 }
 
+var errInvalidHZGB2312 = errors.New("simplifiedchinese: invalid HZ-GB2312 encoding")
+
 const (
 	asciiState = iota
 	gbState
@@ -47,18 +50,14 @@ loop:
 	for ; nSrc < len(src); nSrc += size {
 		c0 := src[nSrc]
 		if c0 >= utf8.RuneSelf {
-			r, size = utf8.RuneError, 1
-			goto write
+			err = errInvalidHZGB2312
+			break loop
 		}
 
 		if c0 == '~' {
 			if nSrc+1 >= len(src) {
-				if !atEOF {
-					err = transform.ErrShortSrc
-					break loop
-				}
-				r = utf8.RuneError
-				goto write
+				err = transform.ErrShortSrc
+				break loop
 			}
 			size = 2
 			switch src[nSrc+1] {
@@ -79,8 +78,8 @@ loop:
 			case '\n':
 				continue
 			default:
-				r = utf8.RuneError
-				goto write
+				err = errInvalidHZGB2312
+				break loop
 			}
 		}
 
@@ -88,36 +87,32 @@ loop:
 			r, size = rune(c0), 1
 		} else {
 			if nSrc+1 >= len(src) {
-				if !atEOF {
-					err = transform.ErrShortSrc
-					break loop
-				}
-				r, size = utf8.RuneError, 1
-				goto write
+				err = transform.ErrShortSrc
+				break loop
 			}
-			size = 2
 			c1 := src[nSrc+1]
 			if c0 < 0x21 || 0x7e <= c0 || c1 < 0x21 || 0x7f <= c1 {
-				// error
-			} else if i := int(c0-0x01)*190 + int(c1+0x3f); i < len(decode) {
+				err = errInvalidHZGB2312
+				break loop
+			}
+
+			r, size = '\ufffd', 2
+			if i := int(c0-0x01)*190 + int(c1+0x3f); i < len(decode) {
 				r = rune(decode[i])
-				if r != 0 {
-					goto write
+				if r == 0 {
+					r = '\ufffd'
 				}
 			}
-			if c1 > utf8.RuneSelf {
-				// Be consistent and always treat non-ASCII as a single error.
-				size = 1
-			}
-			r = utf8.RuneError
 		}
 
-	write:
 		if nDst+utf8.RuneLen(r) > len(dst) {
 			err = transform.ErrShortDst
 			break loop
 		}
 		nDst += utf8.EncodeRune(dst[nDst:], r)
+	}
+	if atEOF && err == transform.ErrShortSrc {
+		err = errInvalidHZGB2312
 	}
 	return nDst, nSrc, err
 }
@@ -145,81 +140,71 @@ func (e *hzGB2312Encoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int
 				dst[nDst+1] = '~'
 				nDst += 2
 				continue
-			} else if *e != asciiState {
-				if nDst+3 > len(dst) {
-					err = transform.ErrShortDst
+			}
+
+		} else {
+			// Decode a multi-byte rune.
+			r, size = utf8.DecodeRune(src[nSrc:])
+			if size == 1 {
+				// All valid runes of size 1 (those below utf8.RuneSelf) were
+				// handled above. We have invalid UTF-8 or we haven't seen the
+				// full character yet.
+				if !atEOF && !utf8.FullRune(src[nSrc:]) {
+					err = transform.ErrShortSrc
 					break
 				}
-				*e = asciiState
-				dst[nDst+0] = '~'
-				dst[nDst+1] = '}'
-				nDst += 2
-			} else if nDst >= len(dst) {
-				err = transform.ErrShortDst
-				break
 			}
-			dst[nDst] = uint8(r)
-			nDst += 1
-			continue
 
+			// func init checks that the switch covers all tables.
+			switch {
+			case encode0Low <= r && r < encode0High:
+				if r = rune(encode0[r-encode0Low]); r != 0 {
+					goto writeGB
+				}
+			case encode1Low <= r && r < encode1High:
+				if r = rune(encode1[r-encode1Low]); r != 0 {
+					goto writeGB
+				}
+			case encode2Low <= r && r < encode2High:
+				if r = rune(encode2[r-encode2Low]); r != 0 {
+					goto writeGB
+				}
+			case encode3Low <= r && r < encode3High:
+				if r = rune(encode3[r-encode3Low]); r != 0 {
+					goto writeGB
+				}
+			case encode4Low <= r && r < encode4High:
+				if r = rune(encode4[r-encode4Low]); r != 0 {
+					goto writeGB
+				}
+			}
+			r = encoding.ASCIISub
 		}
 
-		// Decode a multi-byte rune.
-		r, size = utf8.DecodeRune(src[nSrc:])
-		if size == 1 {
-			// All valid runes of size 1 (those below utf8.RuneSelf) were
-			// handled above. We have invalid UTF-8 or we haven't seen the
-			// full character yet.
-			if !atEOF && !utf8.FullRune(src[nSrc:]) {
-				err = transform.ErrShortSrc
-				break
-			}
-		}
-
-		// func init checks that the switch covers all tables.
-		switch {
-		case encode0Low <= r && r < encode0High:
-			if r = rune(encode0[r-encode0Low]); r != 0 {
-				goto writeGB
-			}
-		case encode1Low <= r && r < encode1High:
-			if r = rune(encode1[r-encode1Low]); r != 0 {
-				goto writeGB
-			}
-		case encode2Low <= r && r < encode2High:
-			if r = rune(encode2[r-encode2Low]); r != 0 {
-				goto writeGB
-			}
-		case encode3Low <= r && r < encode3High:
-			if r = rune(encode3[r-encode3Low]); r != 0 {
-				goto writeGB
-			}
-		case encode4Low <= r && r < encode4High:
-			if r = rune(encode4[r-encode4Low]); r != 0 {
-				goto writeGB
-			}
-		}
-
-	terminateInASCIIState:
-		// Switch back to ASCII state in case of error so that an ASCII
-		// replacement character can be written in the correct state.
+	writeASCII:
 		if *e != asciiState {
-			if nDst+2 > len(dst) {
+			if nDst+3 > len(dst) {
 				err = transform.ErrShortDst
 				break
 			}
+			*e = asciiState
 			dst[nDst+0] = '~'
 			dst[nDst+1] = '}'
 			nDst += 2
+		} else if nDst >= len(dst) {
+			err = transform.ErrShortDst
+			break
 		}
-		err = internal.ErrASCIIReplacement
-		break
+		dst[nDst] = uint8(r)
+		nDst++
+		continue
 
 	writeGB:
 		c0 := uint8(r>>8) - 0x80
 		c1 := uint8(r) - 0x80
 		if c0 < 0x21 || 0x7e <= c0 || c1 < 0x21 || 0x7f <= c1 {
-			goto terminateInASCIIState
+			r = encoding.ASCIISub
+			goto writeASCII
 		}
 		if *e == asciiState {
 			if nDst+4 > len(dst) {
@@ -239,7 +224,5 @@ func (e *hzGB2312Encoder) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int
 		nDst += 2
 		continue
 	}
-	// TODO: should one always terminate in ASCII state to make it safe to
-	// concatenate two HZ-GB2312-encoded strings?
 	return nDst, nSrc, err
 }

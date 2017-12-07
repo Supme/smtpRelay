@@ -16,9 +16,8 @@ package tikv
 import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/store/tikv/mocktikv"
+	"github.com/pingcap/tidb/store/tikv/mock-tikv"
 	"golang.org/x/net/context"
-	goctx "golang.org/x/net/context"
 )
 
 type testSplitSuite struct {
@@ -32,9 +31,12 @@ var _ = Suite(&testSplitSuite{})
 func (s *testSplitSuite) SetUpTest(c *C) {
 	s.cluster = mocktikv.NewCluster()
 	mocktikv.BootstrapWithSingleStore(s.cluster)
-	store, err := NewMockTikvStore(WithCluster(s.cluster))
-	c.Check(err, IsNil)
-	s.store = store.(*tikvStore)
+	mvccStore := mocktikv.NewMvccStore()
+	client := mocktikv.NewRPCClient(s.cluster, mvccStore)
+	pdCli := &codecPDClient{mocktikv.NewPDClient(s.cluster)}
+	store, err := newTikvStore("mock-tikv-store", pdCli, client, false)
+	c.Assert(err, IsNil)
+	s.store = store
 	s.bo = NewBackoffer(5000, context.Background())
 }
 
@@ -67,7 +69,7 @@ func (s *testSplitSuite) TestSplitBatchGet(c *C) {
 	s.split(c, loc.Region.id, []byte("b"))
 	s.store.regionCache.DropRegion(loc.Region)
 
-	// mocktikv will panic if it meets a not-in-region key.
+	// mock-tikv will panic if it meets a not-in-region key.
 	err = snapshot.batchGetSingleRegion(s.bo, batch, func([]byte, []byte) {})
 	c.Assert(err, IsNil)
 }
@@ -84,7 +86,7 @@ func (s *testSplitSuite) TestStaleEpoch(c *C) {
 	c.Assert(err, IsNil)
 	err = txn.Set([]byte("c"), []byte("c"))
 	c.Assert(err, IsNil)
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 
 	// Initiate a split and disable the PD client. If it still works, the

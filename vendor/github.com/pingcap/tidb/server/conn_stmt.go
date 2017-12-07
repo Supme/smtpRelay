@@ -42,7 +42,6 @@ import (
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/util/hack"
-	goctx "golang.org/x/net/context"
 )
 
 func (cc *clientConn) handleStmtPrepare(sql string) error {
@@ -55,11 +54,11 @@ func (cc *clientConn) handleStmtPrepare(sql string) error {
 	//status ok
 	data = append(data, 0)
 	//stmt id
-	data = dumpUint32(data, uint32(stmt.ID()))
+	data = append(data, dumpUint32(uint32(stmt.ID()))...)
 	//number columns
-	data = dumpUint16(data, uint16(len(columns)))
+	data = append(data, dumpUint16(uint16(len(columns)))...)
 	//number params
-	data = dumpUint16(data, uint16(len(params)))
+	data = append(data, dumpUint16(uint16(len(params)))...)
 	//filter [00]
 	data = append(data, 0)
 	//warning count
@@ -72,7 +71,7 @@ func (cc *clientConn) handleStmtPrepare(sql string) error {
 	if len(params) > 0 {
 		for i := 0; i < len(params); i++ {
 			data = data[0:4]
-			data = params[i].Dump(data)
+			data = append(data, params[i].Dump(cc.alloc)...)
 
 			if err := cc.writePacket(data); err != nil {
 				return errors.Trace(err)
@@ -87,7 +86,7 @@ func (cc *clientConn) handleStmtPrepare(sql string) error {
 	if len(columns) > 0 {
 		for i := 0; i < len(columns); i++ {
 			data = data[0:4]
-			data = columns[i].Dump(data)
+			data = append(data, columns[i].Dump(cc.alloc)...)
 
 			if err := cc.writePacket(data); err != nil {
 				return errors.Trace(err)
@@ -102,7 +101,7 @@ func (cc *clientConn) handleStmtPrepare(sql string) error {
 	return errors.Trace(cc.flush())
 }
 
-func (cc *clientConn) handleStmtExecute(goCtx goctx.Context, data []byte) (err error) {
+func (cc *clientConn) handleStmtExecute(data []byte) (err error) {
 	if len(data) < 9 {
 		return mysql.ErrMalformPacket
 	}
@@ -119,12 +118,12 @@ func (cc *clientConn) handleStmtExecute(goCtx goctx.Context, data []byte) (err e
 
 	flag := data[pos]
 	pos++
-	// Now we only support CURSOR_TYPE_NO_CURSOR flag.
+	//now we only support CURSOR_TYPE_NO_CURSOR flag
 	if flag != 0 {
 		return mysql.NewErrf(mysql.ErrUnknown, "unsupported flag %d", flag)
 	}
 
-	// skip iteration-count, always 1
+	//skip iteration-count, always 1
 	pos += 4
 
 	var (
@@ -172,7 +171,7 @@ func (cc *clientConn) handleStmtExecute(goCtx goctx.Context, data []byte) (err e
 		return errors.Trace(cc.writeOK())
 	}
 
-	return errors.Trace(cc.writeResultset(goCtx, rs, true, false))
+	return errors.Trace(cc.writeResultset(rs, true, false))
 }
 
 func parseStmtArgs(args []interface{}, boundParams [][]byte, nullBitmap, paramTypes, paramValues []byte) (err error) {

@@ -16,12 +16,9 @@
 package ast
 
 import (
-	"io"
-
+	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/types"
-	"github.com/pingcap/tidb/util/chunk"
-	goctx "golang.org/x/net/context"
+	"github.com/pingcap/tidb/util/types"
 )
 
 // Node is the basic element of the AST.
@@ -78,9 +75,6 @@ type ExprNode interface {
 	SetFlag(flag uint64)
 	// GetFlag returns the flag of the expression.
 	GetFlag() uint64
-
-	// Format formats the AST into a writer.
-	Format(w io.Writer)
 }
 
 // FuncNode represents function call expression node.
@@ -122,58 +116,43 @@ type ResultField struct {
 	TableAsName  model.CIStr
 	DBName       model.CIStr
 
-	// Expr represents the expression for the result field. If it is generated from a select field, it would
+	// The expression for the result field. If it is generated from a select field, it would
 	// be the expression of that select field, otherwise the type would be ValueExpr and value
 	// will be set for every retrieved row.
 	Expr      ExprNode
 	TableName *TableName
-	// Referenced indicates the result field has been referenced or not.
+	// Whether this result field has been referenced.
 	// If not, we don't need to get the values.
 	Referenced bool
 }
 
+// Row represents a single row from Recordset.
+type Row struct {
+	Data []types.Datum
+}
+
 // RecordSet is an abstract result set interface to help get data from Plan.
 type RecordSet interface {
+
 	// Fields gets result fields.
-	Fields() []*ResultField
+	Fields() (fields []*ResultField, err error)
 
 	// Next returns the next row, nil row means there is no more to return.
-	Next(goCtx goctx.Context) (row types.Row, err error)
-
-	// NextChunk reads records into chunk.
-	NextChunk(chk *chunk.Chunk) error
-
-	// NewChunk creates a new chunk with initial capacity.
-	NewChunk() *chunk.Chunk
-
-	// SupportChunk check if the RecordSet supports Chunk structure.
-	SupportChunk() bool
+	Next() (row *Row, err error)
 
 	// Close closes the underlying iterator, call Next after Close will
 	// restart the iteration.
 	Close() error
 }
 
-// RowToDatums converts row to datum slice.
-func RowToDatums(row types.Row, fields []*ResultField) []types.Datum {
-	datums := make([]types.Datum, len(fields))
-	for i, f := range fields {
-		datums[i] = row.GetDatum(i, &f.Column.FieldType)
-	}
-	return datums
-}
-
-// ResultSetNode interface has a ResultFields property, represents a Node that returns result set.
+// The ResultSetNode interface has a ResultFields property, represents a Node that returns result set.
 // Implementations include SelectStmt, SubqueryExpr, TableSource, TableName and Join.
 type ResultSetNode interface {
 	Node
-}
-
-// SensitiveStmtNode overloads StmtNode and provides a SecureText method.
-type SensitiveStmtNode interface {
-	StmtNode
-	// SecureText is different from Text that it hide password information.
-	SecureText() string
+	// GetResultFields gets result fields.
+	GetResultFields() []*ResultField
+	// SetResultFields sets result fields.
+	SetResultFields(fields []*ResultField)
 }
 
 // Statement is an interface for SQL execution.
@@ -186,16 +165,7 @@ type Statement interface {
 	OriginText() string
 
 	// Exec executes SQL and gets a Recordset.
-	Exec(goCtx goctx.Context) (RecordSet, error)
-
-	// IsPrepared returns whether this statement is prepared statement.
-	IsPrepared() bool
-
-	// IsReadOnly returns if the statement is read only. For example: SelectStmt without lock.
-	IsReadOnly() bool
-
-	// RebuildPlan rebuilds the plan of the statement.
-	RebuildPlan() error
+	Exec(ctx context.Context) (RecordSet, error)
 }
 
 // Visitor visits a Node.

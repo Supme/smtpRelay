@@ -15,7 +15,6 @@ package tablecodec
 
 import (
 	"bytes"
-	"encoding/binary"
 	"math"
 	"time"
 
@@ -23,8 +22,8 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/codec"
+	"github.com/pingcap/tidb/util/types"
 )
 
 var (
@@ -141,9 +140,7 @@ func DecodeTableID(key kv.Key) int64 {
 		return 0
 	}
 	key = key[len(tablePrefix):]
-	_, tableID, err := codec.DecodeInt(key)
-	// TODO: return error.
-	terror.Log(errors.Trace(err))
+	_, tableID, _ := codec.DecodeInt(key)
 	return tableID
 }
 
@@ -154,8 +151,8 @@ func DecodeRowKey(key kv.Key) (int64, error) {
 }
 
 // EncodeValue encodes a go value to bytes.
-func EncodeValue(raw types.Datum, loc *time.Location) ([]byte, error) {
-	v, err := flatten(raw, loc)
+func EncodeValue(raw types.Datum) ([]byte, error) {
+	v, err := flatten(raw)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -165,7 +162,7 @@ func EncodeValue(raw types.Datum, loc *time.Location) ([]byte, error) {
 
 // EncodeRow encode row data and column ids into a slice of byte.
 // Row layout: colID1, value1, colID2, value2, .....
-func EncodeRow(row []types.Datum, colIDs []int64, loc *time.Location) ([]byte, error) {
+func EncodeRow(row []types.Datum, colIDs []int64) ([]byte, error) {
 	if len(row) != len(colIDs) {
 		return nil, errors.Errorf("EncodeRow error: data and columnID count not match %d vs %d", len(row), len(colIDs))
 	}
@@ -174,7 +171,7 @@ func EncodeRow(row []types.Datum, colIDs []int64, loc *time.Location) ([]byte, e
 		id := colIDs[i]
 		idv := types.NewIntDatum(id)
 		values[2*i] = idv
-		fc, err := flatten(c, loc)
+		fc, err := flatten(c)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -187,18 +184,11 @@ func EncodeRow(row []types.Datum, colIDs []int64, loc *time.Location) ([]byte, e
 	return codec.EncodeValue(nil, values...)
 }
 
-func flatten(data types.Datum, loc *time.Location) (types.Datum, error) {
+func flatten(data types.Datum) (types.Datum, error) {
 	switch data.Kind() {
 	case types.KindMysqlTime:
 		// for mysql datetime, timestamp and date type
-		t := data.GetMysqlTime()
-		if t.Type == mysql.TypeTimestamp && loc != time.UTC {
-			err := t.ConvertTimeZone(loc, time.UTC)
-			if err != nil {
-				return data, errors.Trace(err)
-			}
-		}
-		v, err := t.ToPackedUint()
+		v, err := data.GetMysqlTime().ToPackedUint()
 		return types.NewUintDatum(v), errors.Trace(err)
 	case types.KindMysqlDuration:
 		// for mysql time type
@@ -210,44 +200,62 @@ func flatten(data types.Datum, loc *time.Location) (types.Datum, error) {
 	case types.KindMysqlSet:
 		data.SetUint64(data.GetMysqlSet().Value)
 		return data, nil
-	case types.KindBinaryLiteral, types.KindMysqlBit:
-		// We don't need to handle errors here since the literal is ensured to be able to store in uint64 in convertToMysqlBit.
-		val, err := data.GetBinaryLiteral().ToInt()
-		if err != nil {
-			return data, errors.Trace(err)
-		}
-		data.SetUint64(val)
+	case types.KindMysqlBit:
+		data.SetUint64(data.GetMysqlBit().Value)
+		return data, nil
+	case types.KindMysqlHex:
+		data.SetInt64(data.GetMysqlHex().Value)
 		return data, nil
 	default:
 		return data, nil
 	}
 }
 
+// DecodeValues decodes a byte slice into datums with column types.
+func DecodeValues(data []byte, fts []*types.FieldType, inIndex bool) ([]types.Datum, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	values, err := codec.Decode(data, len(fts))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if len(values) > len(fts) {
+		return nil, errInvalidColumnCount.Gen("invalid column count %d is less than value count %d", len(fts), len(values))
+	}
+
+	for i := range values {
+		values[i], err = Unflatten(values[i], fts[i], inIndex)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+	return values, nil
+}
+
 // DecodeColumnValue decodes data to a Datum according to the column info.
-func DecodeColumnValue(data []byte, ft *types.FieldType, loc *time.Location) (types.Datum, error) {
+func DecodeColumnValue(data []byte, ft *types.FieldType) (types.Datum, error) {
 	_, d, err := codec.DecodeOne(data)
 	if err != nil {
 		return types.Datum{}, errors.Trace(err)
 	}
-	colDatum, err := unflatten(d, ft, loc)
+	colDatum, err := Unflatten(d, ft, false)
 	if err != nil {
 		return types.Datum{}, errors.Trace(err)
 	}
 	return colDatum, nil
 }
 
-// DecodeRowWithMap decodes a byte slice into datums with a existing row map.
+// DecodeRow decodes a byte slice into datums.
 // Row layout: colID1, value1, colID2, value2, .....
-func DecodeRowWithMap(b []byte, cols map[int64]*types.FieldType, loc *time.Location, row map[int64]types.Datum) (map[int64]types.Datum, error) {
-	if row == nil {
-		row = make(map[int64]types.Datum, len(cols))
-	}
+func DecodeRow(b []byte, cols map[int64]*types.FieldType) (map[int64]types.Datum, error) {
 	if b == nil {
 		return nil, nil
 	}
 	if len(b) == 1 && b[0] == codec.NilFlag {
 		return nil, nil
 	}
+	row := make(map[int64]types.Datum, len(cols))
 	cnt := 0
 	var (
 		data []byte
@@ -275,7 +283,7 @@ func DecodeRowWithMap(b []byte, cols map[int64]*types.FieldType, loc *time.Locat
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			v, err = unflatten(v, ft, loc)
+			v, err = Unflatten(v, ft, false)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -290,29 +298,22 @@ func DecodeRowWithMap(b []byte, cols map[int64]*types.FieldType, loc *time.Locat
 	return row, nil
 }
 
-// DecodeRow decodes a byte slice into datums.
+// CutRow cut encoded row into byte slices and return interested columns' byte slice.
 // Row layout: colID1, value1, colID2, value2, .....
-func DecodeRow(b []byte, cols map[int64]*types.FieldType, loc *time.Location) (map[int64]types.Datum, error) {
-	return DecodeRowWithMap(b, cols, loc, nil)
-}
-
-// CutRowNew cuts encoded row into byte slices and return columns' byte slice.
-// Row layout: colID1, value1, colID2, value2, .....
-func CutRowNew(data []byte, colIDs map[int64]int) ([][]byte, error) {
+func CutRow(data []byte, cols map[int64]*types.FieldType) (map[int64][]byte, error) {
 	if data == nil {
 		return nil, nil
 	}
 	if len(data) == 1 && data[0] == codec.NilFlag {
 		return nil, nil
 	}
-
+	row := make(map[int64][]byte, len(cols))
+	cnt := 0
 	var (
-		cnt int
 		b   []byte
 		err error
 	)
-	row := make([][]byte, len(colIDs))
-	for len(data) > 0 && cnt < len(colIDs) {
+	for len(data) > 0 && cnt < len(cols) {
 		// Get col id.
 		b, data, err = codec.CutOne(data)
 		if err != nil {
@@ -328,17 +329,17 @@ func CutRowNew(data []byte, colIDs map[int64]int) ([][]byte, error) {
 			return nil, errors.Trace(err)
 		}
 		id := cid.GetInt64()
-		offset, ok := colIDs[id]
+		_, ok := cols[id]
 		if ok {
-			row[offset] = b
+			row[id] = b
 			cnt++
 		}
 	}
 	return row, nil
 }
 
-// unflatten converts a raw datum to a column datum.
-func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (types.Datum, error) {
+// Unflatten converts a raw datum to a column datum.
+func Unflatten(datum types.Datum, ft *types.FieldType, inIndex bool) (types.Datum, error) {
 	if datum.IsNull() {
 		return datum, nil
 	}
@@ -360,23 +361,16 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 		if err != nil {
 			return datum, errors.Trace(err)
 		}
-		if ft.Tp == mysql.TypeTimestamp && !t.IsZero() {
-			err = t.ConvertTimeZone(time.UTC, loc)
-			if err != nil {
-				return datum, errors.Trace(err)
-			}
-		}
 		datum.SetMysqlTime(t)
 		return datum, nil
-	case mysql.TypeDuration: //duration should read fsp from column meta data
-		dur := types.Duration{Duration: time.Duration(datum.GetInt64()), Fsp: ft.Decimal}
+	case mysql.TypeDuration:
+		dur := types.Duration{Duration: time.Duration(datum.GetInt64())}
 		datum.SetValue(dur)
 		return datum, nil
 	case mysql.TypeEnum:
-		// ignore error deliberately, to read empty enum value.
 		enum, err := types.ParseEnumValue(ft.Elems, datum.GetUint64())
 		if err != nil {
-			enum = types.Enum{}
+			return datum, errors.Trace(err)
 		}
 		datum.SetValue(enum)
 		return datum, nil
@@ -388,9 +382,9 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 		datum.SetValue(set)
 		return datum, nil
 	case mysql.TypeBit:
-		val := datum.GetUint64()
-		byteSize := (ft.Flen + 7) >> 3
-		datum.SetMysqlBit(types.NewBinaryLiteralFromUint(val, byteSize))
+		bit := types.Bit{Value: datum.GetUint64(), Width: ft.Flen}
+		datum.SetValue(bit)
+		return datum, nil
 	}
 	return datum, nil
 }
@@ -402,6 +396,12 @@ func EncodeIndexSeekKey(tableID int64, idxID int64, encodedValue []byte) kv.Key 
 	key = codec.EncodeInt(key, idxID)
 	key = append(key, encodedValue...)
 	return key
+}
+
+// DecodeIndexKey decodes datums from an index key.
+func DecodeIndexKey(key kv.Key) ([]types.Datum, error) {
+	b := key[prefixLen+idLen:]
+	return codec.Decode(b, 1)
 }
 
 // CutIndexKey cuts encoded index key into colIDs to bytes slices map.
@@ -417,23 +417,6 @@ func CutIndexKey(key kv.Key, colIDs []int64) (values map[int64][]byte, b []byte,
 			return nil, nil, errors.Trace(err)
 		}
 		values[id] = val
-	}
-	return
-}
-
-// CutIndexKeyNew cuts encoded index key into colIDs to bytes slices.
-// The returned value b is the remaining bytes of the key which would be empty if it is unique index or handle data
-// if it is non-unique index.
-func CutIndexKeyNew(key kv.Key, length int) (values [][]byte, b []byte, err error) {
-	b = key[prefixLen+idLen:]
-	values = make([][]byte, 0, length)
-	for i := 0; i < length; i++ {
-		var val []byte
-		val, b, err = codec.CutOne(b)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-		values = append(values, val)
 	}
 	return
 }
@@ -454,7 +437,7 @@ func EncodeTablePrefix(tableID int64) kv.Key {
 	return key
 }
 
-// appendTableRecordPrefix appends table record prefix  "t[tableID]_r".
+// Record prefix is "t[tableID]_r".
 func appendTableRecordPrefix(buf []byte, tableID int64) []byte {
 	buf = append(buf, tablePrefix...)
 	buf = codec.EncodeInt(buf, tableID)
@@ -462,22 +445,11 @@ func appendTableRecordPrefix(buf []byte, tableID int64) []byte {
 	return buf
 }
 
-// appendTableIndexPrefix appends table index prefix  "t[tableID]_i".
+// Index prefix is "t[tableID]_i".
 func appendTableIndexPrefix(buf []byte, tableID int64) []byte {
 	buf = append(buf, tablePrefix...)
 	buf = codec.EncodeInt(buf, tableID)
 	buf = append(buf, indexPrefixSep...)
-	return buf
-}
-
-// ReplaceRecordKeyTableID replace the tableID in the recordKey buf.
-func ReplaceRecordKeyTableID(buf []byte, tableID int64) []byte {
-	if len(buf) < len(tablePrefix)+8 {
-		return buf
-	}
-
-	u := codec.EncodeIntToCmpUint(tableID)
-	binary.BigEndian.PutUint64(buf[len(tablePrefix):], u)
 	return buf
 }
 
@@ -493,14 +465,6 @@ func GenTableIndexPrefix(tableID int64) kv.Key {
 	return appendTableIndexPrefix(buf, tableID)
 }
 
-// GenTablePrefix composes table record and index prefix: "t[tableID]".
-func GenTablePrefix(tableID int64) kv.Key {
-	buf := make([]byte, 0, len(tablePrefix)+8)
-	buf = append(buf, tablePrefix...)
-	buf = codec.EncodeInt(buf, tableID)
-	return buf
-}
-
 // TruncateToRowKeyLen truncates the key to row key length if the key is longer than row key.
 func TruncateToRowKeyLen(key kv.Key) kv.Key {
 	if len(key) > recordRowKeyLen {
@@ -511,15 +475,19 @@ func TruncateToRowKeyLen(key kv.Key) kv.Key {
 
 // GetTableHandleKeyRange returns table handle's key range with tableID.
 func GetTableHandleKeyRange(tableID int64) (startKey, endKey []byte) {
-	startKey = EncodeRowKeyWithHandle(tableID, math.MinInt64)
-	endKey = EncodeRowKeyWithHandle(tableID, math.MaxInt64)
+	tableStartKey := EncodeRowKeyWithHandle(tableID, math.MinInt64)
+	tableEndKey := EncodeRowKeyWithHandle(tableID, math.MaxInt64)
+	startKey = codec.EncodeBytes(nil, tableStartKey)
+	endKey = codec.EncodeBytes(nil, tableEndKey)
 	return
 }
 
 // GetTableIndexKeyRange returns table index's key range with tableID and indexID.
 func GetTableIndexKeyRange(tableID, indexID int64) (startKey, endKey []byte) {
-	startKey = EncodeIndexSeekKey(tableID, indexID, nil)
-	endKey = EncodeIndexSeekKey(tableID, indexID, []byte{255})
+	start := EncodeIndexSeekKey(tableID, indexID, nil)
+	end := EncodeIndexSeekKey(tableID, indexID, []byte{255})
+	startKey = codec.EncodeBytes(nil, start)
+	endKey = codec.EncodeBytes(nil, end)
 	return
 }
 

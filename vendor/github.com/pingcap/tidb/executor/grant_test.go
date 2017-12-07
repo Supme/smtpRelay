@@ -20,9 +20,11 @@ import (
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/util/testkit"
+	"github.com/pingcap/tidb/util/testleak"
 )
 
 func (s *testSuite) TestGrantGlobal(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	// Create a new user.
 	createUserSQL := `CREATE USER 'testGlobal'@'localhost' IDENTIFIED BY '123';`
@@ -54,6 +56,7 @@ func (s *testSuite) TestGrantGlobal(c *C) {
 }
 
 func (s *testSuite) TestGrantDBScope(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	// Create a new user.
 	createUserSQL := `CREATE USER 'testDB'@'localhost' IDENTIFIED BY '123';`
@@ -83,6 +86,7 @@ func (s *testSuite) TestGrantDBScope(c *C) {
 }
 
 func (s *testSuite) TestWithGrantOption(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	// Create a new user.
 	createUserSQL := `CREATE USER 'testWithGrant'@'localhost' IDENTIFIED BY '123';`
@@ -97,6 +101,7 @@ func (s *testSuite) TestWithGrantOption(c *C) {
 }
 
 func (s *testSuite) TestTableScope(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	// Create a new user.
 	createUserSQL := `CREATE USER 'testTbl'@'localhost' IDENTIFIED BY '123';`
@@ -135,6 +140,7 @@ func (s *testSuite) TestTableScope(c *C) {
 }
 
 func (s *testSuite) TestColumnScope(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	// Create a new user.
 	createUserSQL := `CREATE USER 'testCol'@'localhost' IDENTIFIED BY '123';`
@@ -175,6 +181,7 @@ func (s *testSuite) TestColumnScope(c *C) {
 }
 
 func (s *testSuite) TestIssue2456(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("CREATE USER 'dduser'@'%' IDENTIFIED by '123456';")
 	tk.MustExec("GRANT ALL PRIVILEGES ON `dddb_%`.* TO 'dduser'@'%';")
@@ -182,20 +189,22 @@ func (s *testSuite) TestIssue2456(c *C) {
 }
 
 func (s *testSuite) TestCreateUserWhenGrant(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("DROP USER IF EXISTS 'test'@'%'")
 	tk.MustExec("GRANT ALL PRIVILEGES ON *.* to 'test'@'%' IDENTIFIED BY 'xxx'")
-	// Make sure user is created automatically when grant to a non-exists one.
-	tk.MustQuery("SELECT user FROM mysql.user WHERE user='test' and host='%'").Check(
-		testkit.Rows("test"),
-	)
+	// Make sure user is created automaticly when grant to a non-exists one.
+	rows := tk.MustQuery("SELECT user FROM mysql.user WHERE user='test' and host='%'").Rows()
+	c.Assert(rows, HasLen, 1)
+	c.Check(fmt.Sprintf("%v", rows[0]), Equals, fmt.Sprintf("[%v]", []byte("test")))
 }
 
 func (s *testSuite) TestIssue2654(c *C) {
+	defer testleak.AfterTest(c)()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("DROP USER IF EXISTS 'test'@'%'")
 	tk.MustExec("CREATE USER 'test'@'%' IDENTIFIED BY 'test'")
 	tk.MustExec("GRANT SELECT ON test.* to 'test'")
 	rows := tk.MustQuery("SELECT user,host FROM mysql.user WHERE user='test' and host='%'")
-	rows.Check(testkit.Rows("test %"))
+	rows.Check(testkit.Rows("[116 101 115 116] [37]")) // "test" "%"
 }

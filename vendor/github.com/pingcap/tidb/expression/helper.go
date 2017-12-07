@@ -22,27 +22,39 @@ import (
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/sessionctx/varsutil"
-	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/types"
+)
+
+const (
+	zeroI64 int64 = 0
+	oneI64  int64 = 1
 )
 
 func boolToInt64(v bool) int64 {
 	if v {
-		return 1
+		return int64(1)
 	}
-	return 0
+	return int64(0)
 }
 
-// IsCurrentTimestampExpr returns whether e is CurrentTimestamp expression.
-func IsCurrentTimestampExpr(e ast.ExprNode) bool {
-	if fn, ok := e.(*ast.FuncCallExpr); ok && fn.FnName.L == ast.CurrentTimestamp {
-		return true
-	}
-	return false
-}
+var (
+	// CurrentTimestamp is the keyword getting default value for datetime and timestamp type.
+	CurrentTimestamp  = "CURRENT_TIMESTAMP"
+	currentTimestampL = "current_timestamp"
+	// ZeroTimestamp shows the zero datetime and timestamp.
+	ZeroTimestamp = "0000-00-00 00:00:00"
+)
+
+var (
+	errDefaultValue = errors.New("invalid default value")
+)
 
 // GetTimeValue gets the time value with type tp.
-func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types.Datum, err error) {
+func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (types.Datum, error) {
+	return getTimeValue(ctx, v, tp, fsp)
+}
+
+func getTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types.Datum, err error) {
 	value := types.Time{
 		Type: tp,
 		Fsp:  fsp,
@@ -52,23 +64,16 @@ func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types
 	if err != nil {
 		return d, errors.Trace(err)
 	}
-	sc := ctx.GetSessionVars().StmtCtx
+
 	switch x := v.(type) {
 	case string:
 		upperX := strings.ToUpper(x)
-		if upperX == strings.ToUpper(ast.CurrentTimestamp) {
+		if upperX == CurrentTimestamp {
 			value.Time = types.FromGoTime(defaultTime)
-			if tp == mysql.TypeTimestamp {
-				err = value.ConvertTimeZone(time.Local, ctx.GetSessionVars().GetTimeZone())
-				if err != nil {
-					return d, errors.Trace(err)
-				}
-			}
-		} else if upperX == types.ZeroDatetimeStr {
-			value, err = types.ParseTimeFromNum(sc, 0, tp, fsp)
-			terror.Log(errors.Trace(err))
+		} else if upperX == ZeroTimestamp {
+			value, _ = types.ParseTimeFromNum(0, tp, fsp)
 		} else {
-			value, err = types.ParseTime(sc, x, tp, fsp)
+			value, err = types.ParseTime(x, tp, fsp)
 			if err != nil {
 				return d, errors.Trace(err)
 			}
@@ -76,12 +81,12 @@ func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types
 	case *ast.ValueExpr:
 		switch x.Kind() {
 		case types.KindString:
-			value, err = types.ParseTime(sc, x.GetString(), tp, fsp)
+			value, err = types.ParseTime(x.GetString(), tp, fsp)
 			if err != nil {
 				return d, errors.Trace(err)
 			}
 		case types.KindInt64:
-			value, err = types.ParseTimeFromNum(sc, x.GetInt64(), tp, fsp)
+			value, err = types.ParseTimeFromNum(x.GetInt64(), tp, fsp)
 			if err != nil {
 				return d, errors.Trace(err)
 			}
@@ -91,8 +96,8 @@ func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types
 			return d, errors.Trace(errDefaultValue)
 		}
 	case *ast.FuncCallExpr:
-		if x.FnName.L == ast.CurrentTimestamp {
-			d.SetString(strings.ToUpper(ast.CurrentTimestamp))
+		if x.FnName.L == currentTimestampL {
+			d.SetString(CurrentTimestamp)
 			return d, nil
 		}
 		return d, errors.Trace(errDefaultValue)
@@ -108,42 +113,49 @@ func GetTimeValue(ctx context.Context, v interface{}, tp byte, fsp int) (d types
 			return d, errors.Trace(err)
 		}
 
-		value, err = types.ParseTimeFromNum(sc, xval.GetInt64(), tp, fsp)
+		value, err = types.ParseTimeFromNum(xval.GetInt64(), tp, fsp)
 		if err != nil {
 			return d, errors.Trace(err)
 		}
 	default:
 		return d, nil
 	}
-	if tp == mysql.TypeTimestamp {
-		value.TimeZone = ctx.GetSessionVars().GetTimeZone()
-	}
+
 	d.SetMysqlTime(value)
 	return d, nil
 }
 
+// IsCurrentTimeExpr returns whether e is CurrentTimeExpr.
+func IsCurrentTimeExpr(e ast.ExprNode) bool {
+	x, ok := e.(*ast.FuncCallExpr)
+	if !ok {
+		return false
+	}
+	return x.FnName.L == currentTimestampL
+}
+
 func getSystemTimestamp(ctx context.Context) (time.Time, error) {
-	now := time.Now()
+	value := time.Now()
 
 	if ctx == nil {
-		return now, nil
+		return value, nil
 	}
 
+	// check whether use timestamp varibale
 	sessionVars := ctx.GetSessionVars()
-	timestampStr, err := varsutil.GetSessionSystemVar(sessionVars, "timestamp")
+	val, err := varsutil.GetSessionSystemVar(sessionVars, "timestamp")
 	if err != nil {
-		return now, errors.Trace(err)
+		return value, errors.Trace(err)
 	}
-
-	if timestampStr == "" {
-		return now, nil
+	if val != "" {
+		timestamp, err := types.StrToInt(sessionVars.StmtCtx, val)
+		if err != nil {
+			return time.Time{}, errors.Trace(err)
+		}
+		if timestamp <= 0 {
+			return value, nil
+		}
+		return time.Unix(timestamp, 0), nil
 	}
-	timestamp, err := types.StrToInt(sessionVars.StmtCtx, timestampStr)
-	if err != nil {
-		return time.Time{}, errors.Trace(err)
-	}
-	if timestamp <= 0 {
-		return now, nil
-	}
-	return time.Unix(timestamp, 0), nil
+	return value, nil
 }

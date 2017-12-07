@@ -17,10 +17,9 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/ngaut/log"
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
-	goctx "golang.org/x/net/context"
 )
 
 type testSnapshotSuite struct {
@@ -48,7 +47,7 @@ func (s *testSnapshotSuite) TearDownSuite(c *C) {
 		c.Assert(err, IsNil)
 		scanner.Next()
 	}
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 	err = s.store.Close()
 	c.Assert(err, IsNil)
@@ -78,7 +77,7 @@ func (s *testSnapshotSuite) checkAll(keys []kv.Key, c *C) {
 		c.Assert(v, BytesEquals, v2)
 		scan.Next()
 	}
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 	c.Assert(m, HasLen, cnt)
 }
@@ -89,7 +88,7 @@ func (s *testSnapshotSuite) deleteKeys(keys []kv.Key, c *C) {
 		err := txn.Delete(k)
 		c.Assert(err, IsNil)
 	}
-	err := txn.Commit(goctx.Background())
+	err := txn.Commit()
 	c.Assert(err, IsNil)
 }
 
@@ -102,7 +101,7 @@ func (s *testSnapshotSuite) TestBatchGet(c *C) {
 			err := txn.Set(k, valueBytes(i))
 			c.Assert(err, IsNil)
 		}
-		err := txn.Commit(goctx.Background())
+		err := txn.Commit()
 		c.Assert(err, IsNil)
 
 		keys := makeKeys(rowNum, s.prefix)
@@ -120,7 +119,7 @@ func (s *testSnapshotSuite) TestBatchGetNotExist(c *C) {
 			err := txn.Set(k, valueBytes(i))
 			c.Assert(err, IsNil)
 		}
-		err := txn.Commit(goctx.Background())
+		err := txn.Commit()
 		c.Assert(err, IsNil)
 
 		keys := makeKeys(rowNum, s.prefix)

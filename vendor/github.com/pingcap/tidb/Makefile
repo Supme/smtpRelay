@@ -1,7 +1,5 @@
 ### Makefile for tidb
 
-GOPATH ?= $(shell go env GOPATH)
-
 # Ensure GOPATH is set before running build process.
 ifeq "$(GOPATH)" ""
   $(error Please set the environment variable GOPATH before running `make`)
@@ -11,30 +9,22 @@ CURDIR := $(shell pwd)
 path_to_add := $(addsuffix /bin,$(subst :,/bin:,$(CURDIR)/_vendor:$(GOPATH)))
 export PATH := $(path_to_add):$(PATH)
 
-GO        := go
-GOBUILD   := GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=0 $(GO) build $(BUILD_FLAG)
-GOTEST    := GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=1 $(GO) test -p 3
-OVERALLS  := GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=1 overalls
-GOVERALLS := goveralls
+GO        := GO15VENDOREXPERIMENT="1" go
+GOBUILD   := GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=0 $(GO) build
+GOTEST    := GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=1 $(GO) test
 
 ARCH      := "`uname -s`"
 LINUX     := "Linux"
 MAC       := "Darwin"
-PACKAGES  := $$(go list ./...| grep -vE "vendor")
-FILES     := $$(find . -name "*.go" | grep -vE "vendor")
-TOPDIRS   := $$(ls -d */ | grep -vE "vendor")
+PACKAGES  := $$(go list ./...| grep -vE 'vendor')
+FILES     := $$(find . -name '*.go' | grep -vE 'vendor')
 
-GOFAIL_ENABLE  := $$(find $$PWD/ -type d | grep -vE "(\.git|vendor)" | xargs gofail enable)
-GOFAIL_DISABLE := $$(find $$PWD/ -type d | grep -vE "(\.git|vendor)" | xargs gofail disable)
-
-LDFLAGS += -X "github.com/pingcap/tidb/mysql.TiDBReleaseVersion=$(shell git describe --tags --dirty)"
 LDFLAGS += -X "github.com/pingcap/tidb/util/printer.TiDBBuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
 LDFLAGS += -X "github.com/pingcap/tidb/util/printer.TiDBGitHash=$(shell git rev-parse HEAD)"
-LDFLAGS += -X "github.com/pingcap/tidb/util/printer.TiDBGitBranch=$(shell git rev-parse --abbrev-ref HEAD)"
 
 TARGET = ""
 
-.PHONY: all build update parser clean todo test gotest interpreter server dev benchkv benchraw check parserlib checklist
+.PHONY: all build update parser clean todo test gotest interpreter server dev benchkv benchraw check parserlib
 
 default: server buildsucc
 
@@ -43,17 +33,20 @@ buildsucc:
 
 all: dev server benchkv
 
-dev: checklist parserlib test check
+dev: parserlib build benchkv test check
 
 build:
 	$(GOBUILD)
+
+TEMP_FILE = temp_parser_file
 
 goyacc:
 	$(GOBUILD) -o bin/goyacc parser/goyacc/main.go
 
 parser: goyacc
-	bin/goyacc -o /dev/null parser/parser.y
-	bin/goyacc -o parser/parser.go parser/parser.y 2>&1 | egrep "(shift|reduce)/reduce" | awk '{print} END {if (NR > 0) {print "Find conflict in parser.y. Please check y.output for more information."; exit 1;}}'
+	bin/goyacc -o /dev/null -xegen $(TEMP_FILE) parser/parser.y
+	bin/goyacc -o parser/parser.go -xe $(TEMP_FILE) parser/parser.y 2>&1 | egrep "(shift|reduce)/reduce" | awk '{print} END {if (NR > 0) {print "Find conflict in parser.y. Please check y.output for more information."; system("rm -f $(TEMP_FILE)"); exit 1;}}'
+	rm -f $(TEMP_FILE)
 	rm -f y.output
 
 	@if [ $(ARCH) = $(LINUX) ]; \
@@ -72,25 +65,22 @@ parserlib: parser/parser.go
 parser/parser.go: parser/parser.y
 	make parser
 
-check: errcheck
+check:
+	bash gitcookie.sh
 	go get github.com/golang/lint/golint
 
 	@echo "vet"
-	@ go tool vet -all -shadow $(TOPDIRS) 2>&1 | awk '{print} END{if(NR>0) {exit 1}}'
-	@ go tool vet -all -shadow *.go 2>&1 | awk '{print} END{if(NR>0) {exit 1}}'
+	@ go tool vet $(FILES) 2>&1 | awk '{print} END{if(NR>0) {exit 1}}'
+	@echo "vet --shadow"
+	@ go tool vet --shadow $(FILES) 2>&1 | awk '{print} END{if(NR>0) {exit 1}}'
 	@echo "golint"
 	@ golint ./... 2>&1 | grep -vE 'context\.Context|LastInsertId|NewLexer|\.pb\.go' | awk '{print} END{if(NR>0) {exit 1}}'
 	@echo "gofmt (simplify)"
 	@ gofmt -s -l -w $(FILES) 2>&1 | grep -v "parser/parser.go" | awk '{print} END{if(NR>0) {exit 1}}'
 
-goword:
-	go get github.com/chzchzchz/goword
-	@echo "goword"
-	@ goword $(FILES) | awk '{print} END{if(NR>0) {exit 1}}'
-
 errcheck:
 	go get github.com/kisielk/errcheck
-	@ GOPATH=$(CURDIR)/_vendor:$(GOPATH) errcheck -blank $(PACKAGES) | grep -v "_test\.go" | awk '{print} END{if(NR>0) {exit 1}}'
+	errcheck -blank $(PACKAGES)
 
 clean:
 	$(GO) clean -i ./...
@@ -102,47 +92,24 @@ todo:
 	@grep -n BUG */*.go parser/parser.y || true
 	@grep -n println */*.go parser/parser.y || true
 
-test: checklist gotest
+test: gotest
 
 gotest: parserlib
-ifeq ("$(TRAVIS_COVERAGE)", "1")
-	@echo "Running in TRAVIS_COVERAGE mode."
-	@export log_level=error; \
-	go get github.com/go-playground/overalls
-	go get github.com/mattn/goveralls
-	$(OVERALLS) -project=github.com/pingcap/tidb -covermode=count -ignore='.git,_vendor'
-	$(GOVERALLS) -service=travis-ci -coverprofile=overalls.coverprofile
-else
-	@echo "Running in native mode."
-	go get github.com/coreos/gofail
-	@$(GOFAIL_ENABLE)
-	@export log_level=error; \
-	$(GOTEST) -cover $(PACKAGES) || { $(GOFAIL_DISABLE); exit 1; }
-	@$(GOFAIL_DISABLE)
-endif
+	@export log_level=error;\
+	$(GOTEST) -cover $(PACKAGES)
 
 race: parserlib
 	@export log_level=debug; \
-	$(GOTEST) -check.exclude="TestFail" -race $(PACKAGES)
-
-leak: parserlib
-	@export log_level=debug; \
-	$(GOTEST) -check.exclude="TestFail" -tags leak $(PACKAGES)
+	$(GOTEST) -race $(PACKAGES)
 
 tikv_integration_test: parserlib
-	$(GOTEST) -check.exclude="TestFail" ./store/tikv/. -with-tikv=true
-
-RACE_FLAG = 
-ifeq ("$(WITH_RACE)", "1")
-	RACE_FLAG = -race
-	GOBUILD   = GOPATH=$(CURDIR)/_vendor:$(GOPATH) CGO_ENABLED=1 $(GO) build
-endif
+	$(GOTEST) ./store/tikv/. -with-tikv=true
 
 server: parserlib
 ifeq ($(TARGET), "")
-	$(GOBUILD) $(RACE_FLAG) -ldflags '$(LDFLAGS)' -o bin/tidb-server tidb-server/main.go
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/tidb-server tidb-server/main.go
 else
-	$(GOBUILD) $(RACE_FLAG) -ldflags '$(LDFLAGS)' -o '$(TARGET)' tidb-server/main.go
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o '$(TARGET)' tidb-server/main.go
 endif
 
 benchkv:
@@ -168,14 +135,3 @@ endif
 	glide vc --only-code --no-tests
 	mkdir -p _vendor
 	mv vendor _vendor/src
-
-checklist:
-	cat checklist.md
-
-gofail-enable:
-	# Converting gofail failpoints...
-	@$(GOFAIL_ENABLE)
-
-gofail-disable:
-	# Restoring gofail failpoints...
-	@$(GOFAIL_DISABLE)

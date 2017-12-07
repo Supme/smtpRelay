@@ -11,17 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package structure_test
+package structure
 
 import (
 	"testing"
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/store/tikv"
-	"github.com/pingcap/tidb/structure"
+	"github.com/pingcap/tidb/store/localstore"
+	"github.com/pingcap/tidb/store/localstore/goleveldb"
 	"github.com/pingcap/tidb/util/testleak"
-	goctx "golang.org/x/net/context"
 )
 
 func TestTxStructure(t *testing.T) {
@@ -36,8 +35,11 @@ type testTxStructureSuite struct {
 }
 
 func (s *testTxStructureSuite) SetUpSuite(c *C) {
-	testleak.BeforeTest()
-	store, err := tikv.NewMockTikvStore()
+	path := "memory:"
+	d := localstore.Driver{
+		Driver: goleveldb.MemoryDriver{},
+	}
+	store, err := d.Open(path)
 	c.Assert(err, IsNil)
 	s.store = store
 }
@@ -45,15 +47,15 @@ func (s *testTxStructureSuite) SetUpSuite(c *C) {
 func (s *testTxStructureSuite) TearDownSuite(c *C) {
 	err := s.store.Close()
 	c.Assert(err, IsNil)
-	testleak.AfterTest(c)
 }
 
 func (s *testTxStructureSuite) TestString(c *C) {
+	defer testleak.AfterTest(c)()
 	txn, err := s.store.Begin()
 	c.Assert(err, IsNil)
 	defer txn.Rollback()
 
-	tx := structure.NewStructure(txn, txn, []byte{0x00})
+	tx := NewStructure(txn, txn, []byte{0x00})
 
 	key := []byte("a")
 	value := []byte("1")
@@ -83,16 +85,17 @@ func (s *testTxStructureSuite) TestString(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(v, IsNil)
 
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
 func (s *testTxStructureSuite) TestList(c *C) {
+	defer testleak.AfterTest(c)()
 	txn, err := s.store.Begin()
 	c.Assert(err, IsNil)
 	defer txn.Rollback()
 
-	tx := structure.NewStructure(txn, txn, []byte{0x00})
+	tx := NewStructure(txn, txn, []byte{0x00})
 
 	key := []byte("a")
 	err = tx.LPush(key, []byte("3"), []byte("2"), []byte("1"))
@@ -165,16 +168,17 @@ func (s *testTxStructureSuite) TestList(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(l, Equals, int64(0))
 
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
 func (s *testTxStructureSuite) TestHash(c *C) {
+	defer testleak.AfterTest(c)()
 	txn, err := s.store.Begin()
 	c.Assert(err, IsNil)
 	defer txn.Rollback()
 
-	tx := structure.NewStructure(txn, txn, []byte{0x00})
+	tx := NewStructure(txn, txn, []byte{0x00})
 
 	key := []byte("a")
 
@@ -202,9 +206,9 @@ func (s *testTxStructureSuite) TestHash(c *C) {
 
 	res, err := tx.HGetAll(key)
 	c.Assert(err, IsNil)
-	c.Assert(res, DeepEquals, []structure.HashPair{
-		{Field: []byte("1"), Value: []byte("1")},
-		{Field: []byte("2"), Value: []byte("2")}})
+	c.Assert(res, DeepEquals, []HashPair{
+		{[]byte("1"), []byte("1")},
+		{[]byte("2"), []byte("2")}})
 
 	err = tx.HDel(key, []byte("1"))
 	c.Assert(err, IsNil)
@@ -324,11 +328,11 @@ func (s *testTxStructureSuite) TestHash(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(value, DeepEquals, []byte("2"))
 
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 
 	err = kv.RunInNewTxn(s.store, false, func(txn kv.Transaction) error {
-		t := structure.NewStructure(txn, txn, []byte{0x00})
+		t := NewStructure(txn, txn, []byte{0x00})
 		err = t.Set(key, []byte("abc"))
 		c.Assert(err, IsNil)
 

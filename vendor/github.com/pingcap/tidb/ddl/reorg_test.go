@@ -20,9 +20,8 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/testleak"
-	goctx "golang.org/x/net/context"
+	"github.com/pingcap/tidb/util/types"
 )
 
 type testCtxKeyType int
@@ -38,7 +37,7 @@ func (s *testDDLSuite) TestReorg(c *C) {
 	store := testCreateStore(c, "test_reorg")
 	defer store.Close()
 
-	d := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
+	d := newDDL(store, nil, nil, testLease)
 	defer d.Stop()
 
 	time.Sleep(testLease)
@@ -58,61 +57,39 @@ func (s *testDDLSuite) TestReorg(c *C) {
 	err = ctx.NewTxn()
 	c.Assert(err, IsNil)
 	ctx.Txn().Set([]byte("a"), []byte("b"))
-	err = ctx.Txn().Commit(goctx.Background())
+	err = ctx.Txn().Commit()
 	c.Assert(err, IsNil)
 
+	done := make(chan struct{})
 	rowCount := int64(10)
-	handle := int64(100)
 	f := func() error {
-		d.reorgCtx.setRowCountAndHandle(rowCount, handle)
-		time.Sleep(20 * testLease)
+		d.setReorgRowCount(rowCount)
+		time.Sleep(4 * testLease)
+		close(done)
 		return nil
 	}
-	job := &model.Job{
-		ID:          1,
-		SnapshotVer: 1, // Make sure it is not zero. So the reorgInfo's frist is false.
-	}
-	err = ctx.NewTxn()
-	c.Assert(err, IsNil)
-	m := meta.NewMeta(ctx.Txn())
-	err = d.runReorgJob(m, job, f)
+	job := &model.Job{}
+	err = d.runReorgJob(job, f)
 	c.Assert(err, NotNil)
 
-	// The longest to wait for 5 seconds to make sure the function of f is returned.
-	for i := 0; i < 1000; i++ {
-		time.Sleep(5 * time.Millisecond)
-		err = d.runReorgJob(m, job, f)
-		if err == nil {
-			c.Assert(job.RowCount, Equals, rowCount)
-			c.Assert(d.reorgCtx.rowCount, Equals, int64(0))
-
-			// Test whether reorgInfo's Handle is update.
-			err = ctx.Txn().Commit(goctx.Background())
-			c.Assert(err, IsNil)
-			err = ctx.NewTxn()
-			c.Assert(err, IsNil)
-			m = meta.NewMeta(ctx.Txn())
-			info, err1 := d.getReorgInfo(m, job)
-			c.Assert(err1, IsNil)
-			c.Assert(info.Handle, Equals, handle)
-			c.Assert(d.reorgCtx.doneHandle, Equals, int64(0))
-			break
-		}
-	}
+	<-done
+	// Make sure the function of f is returned.
+	time.Sleep(5 * time.Millisecond)
+	err = d.runReorgJob(job, f)
 	c.Assert(err, IsNil)
+	c.Assert(job.RowCount, Equals, rowCount)
+	c.Assert(d.reorgRowCount, Equals, int64(0))
 
 	d.Stop()
-	err = d.runReorgJob(m, job, func() error {
+	err = d.runReorgJob(job, func() error {
 		time.Sleep(4 * testLease)
 		return nil
 	})
 	c.Assert(err, NotNil)
-	err = ctx.Txn().Commit(goctx.Background())
-	c.Assert(err, IsNil)
+	d.start()
 
-	d.start(goctx.Background())
 	job = &model.Job{
-		ID:       2,
+		ID:       1,
 		SchemaID: 1,
 		Type:     model.ActionCreateSchema,
 		Args:     []interface{}{model.NewCIStr("test")},
@@ -126,6 +103,7 @@ func (s *testDDLSuite) TestReorg(c *C) {
 		c.Assert(err1, IsNil)
 		err1 = info.UpdateHandle(txn, 1)
 		c.Assert(err1, IsNil)
+
 		return nil
 	})
 	c.Assert(err, IsNil)
@@ -146,14 +124,14 @@ func (s *testDDLSuite) TestReorgOwner(c *C) {
 	store := testCreateStore(c, "test_reorg_owner")
 	defer store.Close()
 
-	d1 := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
+	d1 := newDDL(store, nil, nil, testLease)
 	defer d1.Stop()
 
 	ctx := testNewContext(d1)
 
-	testCheckOwner(c, d1, true)
+	testCheckOwner(c, d1, true, ddlJobFlag)
 
-	d2 := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
+	d2 := newDDL(store, nil, nil, testLease)
 	defer d2.Stop()
 
 	dbInfo := testSchemaInfo(c, d1, "test")
@@ -161,25 +139,26 @@ func (s *testDDLSuite) TestReorgOwner(c *C) {
 
 	tblInfo := testTableInfo(c, d1, "t", 3)
 	testCreateTable(c, ctx, d1, dbInfo, tblInfo)
+
 	t := testGetTable(c, d1, dbInfo.ID, tblInfo.ID)
 
 	num := 10
 	for i := 0; i < num; i++ {
-		_, err := t.AddRecord(ctx, types.MakeDatums(i, i, i), false)
+		_, err := t.AddRecord(ctx, types.MakeDatums(i, i, i))
 		c.Assert(err, IsNil)
 	}
 
-	err := ctx.Txn().Commit(goctx.Background())
+	err := ctx.Txn().Commit()
 	c.Assert(err, IsNil)
 
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	tc.onJobRunBefore = func(job *model.Job) {
 		if job.SchemaState == model.StateDeleteReorganization {
 			d1.Stop()
 		}
 	}
 
-	d1.SetHook(tc)
+	d1.setHook(tc)
 
 	testDropSchema(c, ctx, d1, dbInfo)
 

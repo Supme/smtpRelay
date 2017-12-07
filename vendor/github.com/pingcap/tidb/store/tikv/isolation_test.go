@@ -23,8 +23,6 @@ import (
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/terror"
-	goctx "golang.org/x/net/context"
 )
 
 // The test suite takes too long under the race detector.
@@ -61,14 +59,14 @@ func (s *testIsolationSuite) SetWithRetry(c *C, k, v []byte) writeRecord {
 		err = txn.Set(k, v)
 		c.Assert(err, IsNil)
 
-		err = txn.Commit(goctx.Background())
+		err = txn.Commit()
 		if err == nil {
 			return writeRecord{
 				startTS:  txn.StartTS(),
 				commitTS: txn.(*tikvTxn).commitTS,
 			}
 		}
-		c.Assert(kv.IsRetryableError(err) || terror.ErrorEqual(err, terror.ErrResultUndetermined), IsTrue)
+		c.Assert(kv.IsRetryableError(err), IsTrue)
 	}
 }
 

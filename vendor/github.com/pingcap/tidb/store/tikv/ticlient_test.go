@@ -19,9 +19,9 @@ import (
 	"time"
 
 	. "github.com/pingcap/check"
+	"github.com/pingcap/tidb"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/util/codec"
-	goctx "golang.org/x/net/context"
 )
 
 var (
@@ -30,9 +30,26 @@ var (
 )
 
 func newTestStore(c *C) *tikvStore {
-	store, err := NewTestTiKVStorage(*withTiKV, *pdAddrs)
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+
+	if *withTiKV {
+		var d Driver
+		store, err := d.Open(fmt.Sprintf("tikv://%s", *pdAddrs))
+		c.Assert(err, IsNil)
+		return store.(*tikvStore)
+	}
+	store, err := NewMockTikvStore()
 	c.Assert(err, IsNil)
 	return store.(*tikvStore)
+}
+
+func newTestStoreWithBootstrap(c *C) *tikvStore {
+	store := newTestStore(c)
+	_, err := tidb.BootstrapSession(store)
+	c.Assert(err, IsNil)
+	return store
 }
 
 type testTiclientSuite struct {
@@ -61,7 +78,7 @@ func (s *testTiclientSuite) TearDownSuite(c *C) {
 		c.Assert(err, IsNil)
 		scanner.Next()
 	}
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 	err = s.store.Close()
 	c.Assert(err, IsNil)
@@ -79,7 +96,7 @@ func (s *testTiclientSuite) TestSingleKey(c *C) {
 	c.Assert(err, IsNil)
 	err = txn.LockKeys(encodeKey(s.prefix, "key"))
 	c.Assert(err, IsNil)
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 
 	txn = s.beginTxn(c)
@@ -90,7 +107,7 @@ func (s *testTiclientSuite) TestSingleKey(c *C) {
 	txn = s.beginTxn(c)
 	err = txn.Delete(encodeKey(s.prefix, "key"))
 	c.Assert(err, IsNil)
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
@@ -102,7 +119,7 @@ func (s *testTiclientSuite) TestMultiKeys(c *C) {
 		err := txn.Set(encodeKey(s.prefix, s08d("key", i)), valueBytes(i))
 		c.Assert(err, IsNil)
 	}
-	err := txn.Commit(goctx.Background())
+	err := txn.Commit()
 	c.Assert(err, IsNil)
 
 	txn = s.beginTxn(c)
@@ -117,7 +134,7 @@ func (s *testTiclientSuite) TestMultiKeys(c *C) {
 		err = txn.Delete(encodeKey(s.prefix, s08d("key", i)))
 		c.Assert(err, IsNil)
 	}
-	err = txn.Commit(goctx.Background())
+	err = txn.Commit()
 	c.Assert(err, IsNil)
 }
 
@@ -128,12 +145,12 @@ func (s *testTiclientSuite) TestNotExist(c *C) {
 }
 
 func (s *testTiclientSuite) TestLargeRequest(c *C) {
-	largeValue := make([]byte, 9*1024*1024) // 9M value.
+	largeValue := make([]byte, 5*1024*1024) // 5M value.
 	txn := s.beginTxn(c)
 	err := txn.Set([]byte("key"), largeValue)
-	c.Assert(err, NotNil)
-	err = txn.Commit(goctx.Background())
 	c.Assert(err, IsNil)
+	err = txn.Commit()
+	c.Assert(err, NotNil)
 	c.Assert(kv.IsRetryableError(err), IsFalse)
 }
 

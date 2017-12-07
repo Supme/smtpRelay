@@ -22,12 +22,12 @@ import (
 
 type buildKeySolver struct{}
 
-func (s *buildKeySolver) optimize(lp LogicalPlan, _ context.Context) (LogicalPlan, error) {
+func (s *buildKeySolver) optimize(lp LogicalPlan, _ context.Context, _ *idAllocator) (LogicalPlan, error) {
 	lp.buildKeyInfo()
 	return lp, nil
 }
 
-func (p *LogicalAggregation) buildKeyInfo() {
+func (p *Aggregation) buildKeyInfo() {
 	p.baseLogicalPlan.buildKeyInfo()
 	for _, key := range p.Children()[0].Schema().Keys {
 		indices := p.schema.ColumnsIndices(key)
@@ -57,7 +57,7 @@ func (p *LogicalAggregation) buildKeyInfo() {
 
 // If a condition is the form of (uniqueKey = constant) or (uniqueKey = Correlated column), it returns at most one row.
 // This function will check it.
-func (p *LogicalSelection) checkMaxOneRowCond(unique expression.Expression, constOrCorCol expression.Expression) bool {
+func (p *Selection) checkMaxOneRowCond(unique expression.Expression, constOrCorCol expression.Expression) bool {
 	col, ok := unique.(*expression.Column)
 	if !ok {
 		return false
@@ -73,7 +73,7 @@ func (p *LogicalSelection) checkMaxOneRowCond(unique expression.Expression, cons
 	return okCorCol
 }
 
-func (p *LogicalSelection) buildKeyInfo() {
+func (p *Selection) buildKeyInfo() {
 	p.baseLogicalPlan.buildKeyInfo()
 	p.schema.MaxOneRow = p.children[0].Schema().MaxOneRow
 	for _, cond := range p.Conditions {
@@ -88,7 +88,7 @@ func (p *LogicalSelection) buildKeyInfo() {
 
 // A bijection exists between columns of a projection's schema and this projection's Exprs.
 // Sometimes we need a schema made by expr of Exprs to convert a column in child's schema to a column in this projection's Schema.
-func (p *LogicalProjection) buildSchemaByExprs() *expression.Schema {
+func (p *Projection) buildSchemaByExprs() *expression.Schema {
 	schema := expression.NewSchema(make([]*expression.Column, 0, p.schema.Len())...)
 	for _, expr := range p.Exprs {
 		if col, isCol := expr.(*expression.Column); isCol {
@@ -96,13 +96,13 @@ func (p *LogicalProjection) buildSchemaByExprs() *expression.Schema {
 		} else {
 			// If the expression is not a column, we add a column to occupy the position.
 			schema.Append(&expression.Column{
-				Position: -1, RetType: expr.GetType()})
+				Position: -1})
 		}
 	}
 	return schema
 }
 
-func (p *LogicalProjection) buildKeyInfo() {
+func (p *Projection) buildKeyInfo() {
 	p.baseLogicalPlan.buildKeyInfo()
 	p.schema.MaxOneRow = p.children[0].Schema().MaxOneRow
 	schema := p.buildSchemaByExprs()
@@ -119,11 +119,11 @@ func (p *LogicalProjection) buildKeyInfo() {
 	}
 }
 
-func (p *LogicalJoin) buildKeyInfo() {
+func (p *Join) buildKeyInfo() {
 	p.baseLogicalPlan.buildKeyInfo()
 	p.schema.MaxOneRow = p.children[0].Schema().MaxOneRow && p.children[1].Schema().MaxOneRow
 	switch p.JoinType {
-	case SemiJoin, LeftOuterSemiJoin, AntiSemiJoin, AntiLeftOuterSemiJoin:
+	case SemiJoin, LeftOuterSemiJoin:
 		p.schema.Keys = p.children[0].Schema().Clone().Keys
 	case InnerJoin, LeftOuterJoin, RightOuterJoin:
 		// If there is no equal conditions, then cartesian product can't be prevented and unique key information will destroy.
@@ -166,7 +166,7 @@ func (p *LogicalJoin) buildKeyInfo() {
 
 func (p *DataSource) buildKeyInfo() {
 	p.baseLogicalPlan.buildKeyInfo()
-	indices := p.availableIndices.indices
+	indices, _ := availableIndices(p.indexHints, p.tableInfo)
 	for _, idx := range indices {
 		if !idx.Unique {
 			continue

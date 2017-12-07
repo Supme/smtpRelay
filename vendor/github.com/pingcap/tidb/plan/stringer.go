@@ -25,7 +25,8 @@ func ToString(p Plan) string {
 }
 
 func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
-	if len(in.Children()) > 1 {
+	switch in.(type) {
+	case *Join, *Union, *PhysicalHashJoin, *PhysicalHashSemiJoin, *Apply, *PhysicalApply:
 		idxs = append(idxs, len(strs))
 	}
 
@@ -41,13 +42,15 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		str = fmt.Sprintf("Index(%s.%s)%v", x.Table.Name.L, x.Index.Name.L, x.Ranges)
 	case *PhysicalTableScan:
 		str = fmt.Sprintf("Table(%s)", x.Table.Name.L)
+	case *PhysicalDummyScan:
+		str = "Dummy"
 	case *PhysicalHashJoin:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
 		strs = strs[:idx]
 		idxs = idxs[:last]
-		if x.SmallChildIdx == 0 {
+		if x.SmallTable == 0 {
 			str = "RightHashJoin{" + strings.Join(children, "->") + "}"
 		} else {
 			str = "LeftHashJoin{" + strings.Join(children, "->") + "}"
@@ -68,66 +71,29 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		} else {
 			str = "SemiJoin{" + strings.Join(children, "->") + "}"
 		}
-		for _, eq := range x.EqualConditions {
-			l := eq.GetArgs()[0].String()
-			r := eq.GetArgs()[1].String()
-			str += fmt.Sprintf("(%s,%s)", l, r)
-		}
-	case *PhysicalMergeJoin:
-		last := len(idxs) - 1
-		idx := idxs[last]
-		children := strs[idx:]
-		strs = strs[:idx]
-		idxs = idxs[:last]
-		id := "MergeJoin"
-		switch x.JoinType {
-		case SemiJoin:
-			id = "MergeSemiJoin"
-		case AntiSemiJoin:
-			id = "MergeAntiSemiJoin"
-		case LeftOuterSemiJoin:
-			id = "MergeLeftOuterSemiJoin"
-		case AntiLeftOuterSemiJoin:
-			id = "MergeAntiLeftOuterSemiJoin"
-		case LeftOuterJoin:
-			id = "MergeLeftOuterJoin"
-		case RightOuterJoin:
-			id = "MergeRightOuterJoin"
-		case InnerJoin:
-			id = "MergeInnerJoin"
-		}
-		str = id + "{" + strings.Join(children, "->") + "}"
-		for _, eq := range x.EqualConditions {
-			l := eq.GetArgs()[0].String()
-			r := eq.GetArgs()[1].String()
-			str += fmt.Sprintf("(%s,%s)", l, r)
-		}
-	case *LogicalApply, *PhysicalApply:
+	case *Apply, *PhysicalApply:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
 		strs = strs[:idx]
 		idxs = idxs[:last]
 		str = "Apply{" + strings.Join(children, "->") + "}"
-	case *LogicalExists, *PhysicalExists:
+	case *Exists:
 		str = "Exists"
-	case *LogicalMaxOneRow, *PhysicalMaxOneRow:
+	case *MaxOneRow:
 		str = "MaxOneRow"
-	case *LogicalLimit, *PhysicalLimit:
+	case *Limit:
 		str = "Limit"
-	case *PhysicalLock, *LogicalLock:
+	case *SelectLock:
 		str = "Lock"
 	case *ShowDDL:
 		str = "ShowDDL"
-	case *Show:
-		if len(x.Conditions) == 0 {
-			str = "Show"
-		} else {
-			str = fmt.Sprintf("Show(%s)", x.Conditions)
-		}
-	case *LogicalSort, *PhysicalSort:
+	case *Sort:
 		str = "Sort"
-	case *LogicalJoin:
+		if x.ExecLimit != nil {
+			str += fmt.Sprintf(" + Limit(%v) + Offset(%v)", x.ExecLimit.Count, x.ExecLimit.Offset)
+		}
+	case *Join:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
@@ -139,7 +105,7 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 			r := eq.GetArgs()[1].String()
 			str += fmt.Sprintf("(%s,%s)", l, r)
 		}
-	case *LogicalUnionAll, *PhysicalUnionAll:
+	case *Union:
 		last := len(idxs) - 1
 		idx := idxs[last]
 		children := strs[idx:]
@@ -152,23 +118,18 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 		} else {
 			str = fmt.Sprintf("DataScan(%s)", x.tableInfo.Name)
 		}
-	case *LogicalSelection:
-		str = fmt.Sprintf("Sel(%s)", x.Conditions)
-	case *PhysicalSelection:
-		str = fmt.Sprintf("Sel(%s)", x.Conditions)
-	case *LogicalProjection, *PhysicalProjection:
+	case *Selection:
+		str = "Selection"
+	case *Projection:
 		str = "Projection"
-	case *LogicalTopN:
-		str = fmt.Sprintf("TopN(%s,%d,%d)", x.ByItems, x.Offset, x.Count)
-	case *PhysicalTopN:
-		str = fmt.Sprintf("TopN(%s,%d,%d)", x.ByItems, x.Offset, x.Count)
-	case *LogicalTableDual, *PhysicalTableDual:
-		str = "Dual"
-	case *PhysicalHashAgg:
-		str = "HashAgg"
-	case *PhysicalStreamAgg:
-		str = "StreamAgg"
-	case *LogicalAggregation:
+	case *PhysicalAggregation:
+		switch x.AggType {
+		case StreamedAgg:
+			str = "StreamAgg"
+		default:
+			str = "HashAgg"
+		}
+	case *Aggregation:
 		str = "Aggr("
 		for i, aggFunc := range x.AggFuncs {
 			str += aggFunc.String()
@@ -177,52 +138,8 @@ func toString(in Plan, strs []string, idxs []int) ([]string, []int) {
 			}
 		}
 		str += ")"
-	case *PhysicalTableReader:
-		str = fmt.Sprintf("TableReader(%s)", ToString(x.tablePlan))
-	case *PhysicalIndexReader:
-		str = fmt.Sprintf("IndexReader(%s)", ToString(x.indexPlan))
-	case *PhysicalIndexLookUpReader:
-		str = fmt.Sprintf("IndexLookUp(%s, %s)", ToString(x.indexPlan), ToString(x.tablePlan))
-	case *PhysicalUnionScan:
-		str = fmt.Sprintf("UnionScan(%s)", x.Conditions)
-	case *PhysicalIndexJoin:
-		last := len(idxs) - 1
-		idx := idxs[last]
-		children := strs[idx:]
-		strs = strs[:idx]
-		idxs = idxs[:last]
-		str = "IndexJoin{" + strings.Join(children, "->") + "}"
-		for i := range x.OuterJoinKeys {
-			l := x.OuterJoinKeys[i]
-			r := x.InnerJoinKeys[i]
-			str += fmt.Sprintf("(%s,%s)", l, r)
-		}
-	case *Analyze:
-		str = "Analyze{"
-		var children []string
-		for _, idx := range x.IdxTasks {
-			children = append(children, fmt.Sprintf("Index(%s.%s)", idx.TableInfo.Name.O, idx.IndexInfo.Name.O))
-		}
-		for _, col := range x.ColTasks {
-			var colNames []string
-			if col.PKInfo != nil {
-				colNames = append(colNames, fmt.Sprintf("%s.%s", col.TableInfo.Name.O, col.PKInfo.Name.O))
-			}
-			for _, c := range col.ColsInfo {
-				colNames = append(colNames, fmt.Sprintf("%s.%s", col.TableInfo.Name.O, c.Name.O))
-			}
-			children = append(children, fmt.Sprintf("Table(%s)", strings.Join(colNames, ", ")))
-		}
-		str = str + strings.Join(children, ",") + "}"
-	case *Update:
-		str = fmt.Sprintf("%s->Update", ToString(x.SelectPlan))
-	case *Delete:
-		str = fmt.Sprintf("%s->Delete", ToString(x.SelectPlan))
-	case *Insert:
-		str = "Insert"
-		if x.SelectPlan != nil {
-			str = fmt.Sprintf("%s->Insert", ToString(x.SelectPlan))
-		}
+	case *Cache:
+		str = "Cache"
 	default:
 		str = fmt.Sprintf("%T", in)
 	}

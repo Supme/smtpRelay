@@ -19,12 +19,12 @@ import (
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/ast"
-	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/hack"
 	"github.com/pingcap/tidb/util/testleak"
+	"github.com/pingcap/tidb/util/types"
 )
 
-var aesTests = []struct {
+var aesCases = []struct {
 	origin interface{}
 	key    interface{}
 	crypt  interface{}
@@ -40,13 +40,13 @@ var aesTests = []struct {
 func (s *testEvaluatorSuite) TestAESEncrypt(c *C) {
 	defer testleak.AfterTest(c)()
 	fc := funcs[ast.AesEncrypt]
-	for _, tt := range aesTests {
-		str := types.NewDatum(tt.origin)
-		key := types.NewDatum(tt.key)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{str, key}))
-		crypt, err := evalBuiltinFunc(f, nil)
+	for _, test := range aesCases {
+		str := types.NewDatum(test.origin)
+		key := types.NewDatum(test.key)
+		f, err := fc.getFunction(datumsToConstants([]types.Datum{str, key}), s.ctx)
+		crypt, err := f.eval(nil)
 		c.Assert(err, IsNil)
-		c.Assert(toHex(crypt), DeepEquals, types.NewDatum(tt.crypt))
+		c.Assert(toHex(crypt), DeepEquals, types.NewDatum(test.crypt))
 	}
 	s.testNullInput(c, ast.AesDecrypt)
 }
@@ -54,11 +54,11 @@ func (s *testEvaluatorSuite) TestAESEncrypt(c *C) {
 func (s *testEvaluatorSuite) TestAESDecrypt(c *C) {
 	defer testleak.AfterTest(c)()
 	fc := funcs[ast.AesDecrypt]
-	for _, test := range aesTests {
+	for _, test := range aesCases {
 		cryptStr := fromHex(test.crypt)
 		key := types.NewDatum(test.key)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{cryptStr, key}))
-		str, err := evalBuiltinFunc(f, nil)
+		f, err := fc.getFunction(datumsToConstants([]types.Datum{cryptStr, key}), s.ctx)
+		str, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		c.Assert(str, DeepEquals, types.NewDatum(test.origin))
 	}
@@ -69,13 +69,13 @@ func (s *testEvaluatorSuite) testNullInput(c *C, fnName string) {
 	fc := funcs[fnName]
 	arg := types.NewStringDatum("str")
 	var argNull types.Datum
-	f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{arg, argNull}))
-	crypt, err := evalBuiltinFunc(f, nil)
+	f, err := fc.getFunction(datumsToConstants([]types.Datum{arg, argNull}), s.ctx)
+	crypt, err := f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(crypt.IsNull(), IsTrue)
 
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{argNull, arg}))
-	crypt, err = evalBuiltinFunc(f, nil)
+	f, err = fc.getFunction(datumsToConstants([]types.Datum{argNull, arg}), s.ctx)
+	crypt, err = f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(crypt.IsNull(), IsTrue)
 }
@@ -100,7 +100,7 @@ func fromHex(str interface{}) (d types.Datum) {
 	return d
 }
 
-var sha1Tests = []struct {
+var shaCases = []struct {
 	origin interface{}
 	crypt  string
 }{
@@ -112,27 +112,27 @@ var sha1Tests = []struct {
 	{123.45, "22f8b438ad7e89300b51d88684f3f0b9fa1d7a32"},
 }
 
-func (s *testEvaluatorSuite) TestSha1Hash(c *C) {
+func (s *testEvaluatorSuite) TestShaEncrypt(c *C) {
 	defer testleak.AfterTest(c)()
 	fc := funcs[ast.SHA]
-	for _, tt := range sha1Tests {
-		in := types.NewDatum(tt.origin)
-		f, _ := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{in}))
-		crypt, err := evalBuiltinFunc(f, nil)
+	for _, test := range shaCases {
+		in := types.NewDatum(test.origin)
+		f, _ := fc.getFunction(datumsToConstants([]types.Datum{in}), s.ctx)
+		crypt, err := f.eval(nil)
 		c.Assert(err, IsNil)
 		res, err := crypt.ToString()
 		c.Assert(err, IsNil)
-		c.Assert(res, Equals, tt.crypt)
+		c.Assert(res, Equals, test.crypt)
 	}
 	// test NULL input for sha
 	var argNull types.Datum
-	f, _ := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{argNull}))
-	crypt, err := evalBuiltinFunc(f, nil)
+	f, _ := fc.getFunction(datumsToConstants([]types.Datum{argNull}), s.ctx)
+	crypt, err := f.eval(nil)
 	c.Assert(err, IsNil)
 	c.Assert(crypt.IsNull(), IsTrue)
 }
 
-var sha2Tests = []struct {
+var sha2Cases = []struct {
 	origin     interface{}
 	hashLength interface{}
 	crypt      interface{}
@@ -153,210 +153,51 @@ var sha2Tests = []struct {
 	{"pingcap", 123, nil, false},
 }
 
-func (s *testEvaluatorSuite) TestSha2Hash(c *C) {
+func (s *testEvaluatorSuite) TestSha2Encrypt(c *C) {
 	defer testleak.AfterTest(c)()
 	fc := funcs[ast.SHA2]
-	for _, tt := range sha2Tests {
-		str := types.NewDatum(tt.origin)
-		hashLength := types.NewDatum(tt.hashLength)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{str, hashLength}))
-		crypt, err := evalBuiltinFunc(f, nil)
+	for _, test := range sha2Cases {
+		str := types.NewDatum(test.origin)
+		hashLength := types.NewDatum(test.hashLength)
+		f, err := fc.getFunction(datumsToConstants([]types.Datum{str, hashLength}), s.ctx)
+		crypt, err := f.eval(nil)
 		c.Assert(err, IsNil)
-		if tt.validCase {
+		if test.validCase {
 			res, err := crypt.ToString()
 			c.Assert(err, IsNil)
-			c.Assert(res, Equals, tt.crypt)
+			c.Assert(res, Equals, test.crypt)
 		} else {
 			c.Assert(crypt.IsNull(), IsTrue)
 		}
 	}
 }
 
-func (s *testEvaluatorSuite) TestMD5Hash(c *C) {
-	defer testleak.AfterTest(c)()
-
-	cases := []struct {
-		args     interface{}
-		expected string
-		isNil    bool
-		getErr   bool
-	}{
-		{"", "d41d8cd98f00b204e9800998ecf8427e", false, false},
-		{"a", "0cc175b9c0f1b6a831c399e269772661", false, false},
-		{"ab", "187ef4436122d1cc2f40dc2b92f0eba0", false, false},
-		{"abc", "900150983cd24fb0d6963f7d28e17f72", false, false},
-		{123, "202cb962ac59075b964b07152d234b70", false, false},
-		{"123", "202cb962ac59075b964b07152d234b70", false, false},
-		{123.123, "46ddc40585caa8abc07c460b3485781e", false, false},
-		{nil, "", true, false},
-	}
-	for _, t := range cases {
-		f, err := newFunctionForTest(s.ctx, ast.MD5, s.primitiveValsToConstants([]interface{}{t.args})...)
-		c.Assert(err, IsNil)
-		d, err := f.Eval(nil)
-		if t.getErr {
-			c.Assert(err, NotNil)
-		} else {
-			c.Assert(err, IsNil)
-			if t.isNil {
-				c.Assert(d.Kind(), Equals, types.KindNull)
-			} else {
-				c.Assert(d.GetString(), Equals, t.expected)
-			}
-		}
-	}
-	_, err := funcs[ast.MD5].getFunction(s.ctx, []Expression{Zero})
-	c.Assert(err, IsNil)
-
+type md5Test struct {
+	out interface{}
+	in  interface{}
 }
 
-func (s *testEvaluatorSuite) TestRandomBytes(c *C) {
-	defer testleak.AfterTest(c)()
-	fc := funcs[ast.RandomBytes]
-	f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{types.NewDatum(32)}))
-	c.Assert(err, IsNil)
-	out, err := evalBuiltinFunc(f, nil)
-	c.Assert(err, IsNil)
-	c.Assert(len(out.GetBytes()), Equals, 32)
-
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{types.NewDatum(1025)}))
-	c.Assert(err, IsNil)
-	_, err = evalBuiltinFunc(f, nil)
-	c.Assert(err, NotNil)
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{types.NewDatum(-32)}))
-	c.Assert(err, IsNil)
-	_, err = evalBuiltinFunc(f, nil)
-	c.Assert(err, NotNil)
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{types.NewDatum(0)}))
-	c.Assert(err, IsNil)
-	_, err = evalBuiltinFunc(f, nil)
-	c.Assert(err, NotNil)
-
-	f, err = fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{types.NewDatum(nil)}))
-	c.Assert(err, IsNil)
-	out, err = evalBuiltinFunc(f, nil)
-	c.Assert(err, IsNil)
-	c.Assert(len(out.GetBytes()), Equals, 0)
+var md5Cases = []md5Test{
+	{"d41d8cd98f00b204e9800998ecf8427e", ""},
+	{"0cc175b9c0f1b6a831c399e269772661", "a"},
+	{"187ef4436122d1cc2f40dc2b92f0eba0", "ab"},
+	{"900150983cd24fb0d6963f7d28e17f72", "abc"},
+	{"202cb962ac59075b964b07152d234b70", 123},
+	{"202cb962ac59075b964b07152d234b70", "123"},
+	{"46ddc40585caa8abc07c460b3485781e", 123.123},
+	{nil, nil},
 }
 
-func decodeHex(str string) []byte {
-	ret, err := hex.DecodeString(str)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
-func (s *testEvaluatorSuite) TestCompress(c *C) {
+func (s *testEvaluatorSuite) TestMD5(c *C) {
 	defer testleak.AfterTest(c)()
-	tests := []struct {
-		in     interface{}
-		expect interface{}
-	}{
-		{"hello world", string(decodeHex("0B000000789CCA48CDC9C95728CF2FCA4901040000FFFF1A0B045D"))},
-		{"", ""},
-		{nil, nil},
-	}
-
-	fc := funcs[ast.Compress]
-	for _, test := range tests {
+	fc := funcs[ast.MD5]
+	for _, test := range md5Cases {
 		arg := types.NewDatum(test.in)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{arg}))
-		c.Assert(err, IsNil, Commentf("%v", test))
-		out, err := evalBuiltinFunc(f, nil)
-		c.Assert(err, IsNil, Commentf("%v", test))
-		c.Assert(out, DeepEquals, types.NewDatum(test.expect), Commentf("%v", test))
-	}
-}
-
-func (s *testEvaluatorSuite) TestUncompress(c *C) {
-	defer testleak.AfterTest(c)()
-	tests := []struct {
-		in     interface{}
-		expect interface{}
-	}{
-		{decodeHex("0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D"), "hello world"},         // zlib result from MySQL
-		{decodeHex("0B000000789CCA48CDC9C95728CF2FCA4901040000FFFF1A0B045D"), "hello world"}, // zlib result from TiDB
-		{decodeHex(""), ""},
-		{"1", nil},
-		{"1234", nil},
-		{"12345", nil},
-		{decodeHex("0B"), nil},
-		{decodeHex("0B000000"), nil},
-		{decodeHex("0B0000001234"), nil},
-		{12345, nil},
-		{nil, nil},
-	}
-
-	fc := funcs[ast.Uncompress]
-	for _, test := range tests {
-		arg := types.NewDatum(test.in)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{arg}))
-		c.Assert(err, IsNil, Commentf("%v", test))
-		out, err := evalBuiltinFunc(f, nil)
-		c.Assert(err, IsNil, Commentf("%v", test))
-		c.Assert(out, DeepEquals, types.NewDatum(test.expect), Commentf("%v", test))
-	}
-}
-
-func (s *testEvaluatorSuite) TestUncompressLength(c *C) {
-	defer testleak.AfterTest(c)()
-	tests := []struct {
-		in     interface{}
-		expect interface{}
-	}{
-		{decodeHex("0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D"), int64(11)},         // zlib result from MySQL
-		{decodeHex("0B000000789CCA48CDC9C95728CF2FCA4901040000FFFF1A0B045D"), int64(11)}, // zlib result from TiDB
-		{decodeHex(""), int64(0)},
-		{"1", int64(0)},
-		{"123", int64(0)},
-		{decodeHex("0B"), int64(0)},
-		{decodeHex("0B00"), int64(0)},
-		{decodeHex("0B000000"), int64(0x0)},
-		{decodeHex("0B0000001234"), int64(0x0B)},
-		{12345, int64(875770417)},
-		{nil, nil},
-	}
-
-	fc := funcs[ast.UncompressedLength]
-	for _, test := range tests {
-		arg := types.NewDatum(test.in)
-		f, err := fc.getFunction(s.ctx, s.datumsToConstants([]types.Datum{arg}))
-		c.Assert(err, IsNil, Commentf("%v", test))
-		out, err := evalBuiltinFunc(f, nil)
-		c.Assert(err, IsNil, Commentf("%v", test))
-		c.Assert(out, DeepEquals, types.NewDatum(test.expect), Commentf("%v", test))
-	}
-}
-
-func (s *testEvaluatorSuite) TestPassword(c *C) {
-	defer testleak.AfterTest(c)()
-	cases := []struct {
-		args     interface{}
-		expected string
-		isNil    bool
-		getErr   bool
-	}{
-		{nil, "", false, false},
-		{"", "", false, false},
-		{"abc", "*0D3CED9BEC10A777AEC23CCC353A8C08A633045E", false, false},
-		{123, "*23AE809DDACAF96AF0FD78ED04B6A265E05AA257", false, false},
-		{1.23, "*A589EEBA8D3F9E1A34A7EE518FAC4566BFAD5BB6", false, false},
-		{types.NewDecFromFloatForTest(123.123), "*B15B84262DB34BFB2C817A45A55C405DC7C52BB1", false, false},
-	}
-
-	for _, t := range cases {
-		f, err := newFunctionForTest(s.ctx, ast.PasswordFunc, s.primitiveValsToConstants([]interface{}{t.args})...)
+		f, err := fc.getFunction(datumsToConstants([]types.Datum{arg}), s.ctx)
 		c.Assert(err, IsNil)
-		d, err := f.Eval(nil)
+		out, err := f.eval(nil)
 		c.Assert(err, IsNil)
-		if t.isNil {
-			c.Assert(d.Kind(), Equals, types.KindNull)
-		} else {
-			c.Assert(d.GetString(), Equals, t.expected)
-		}
+		c.Assert(out, DeepEquals, types.NewDatum(test.out))
 	}
-
-	_, err := funcs[ast.PasswordFunc].getFunction(s.ctx, []Expression{Zero})
-	c.Assert(err, IsNil)
+	s.testNullInput(c, ast.AesDecrypt)
 }

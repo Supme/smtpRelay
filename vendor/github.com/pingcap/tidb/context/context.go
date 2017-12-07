@@ -15,12 +15,11 @@ package context
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util"
-	"github.com/pingcap/tidb/util/kvcache"
-	goctx "golang.org/x/net/context"
 )
 
 // Context is an interface for transaction and executive args environment.
@@ -49,11 +48,6 @@ type Context interface {
 
 	GetSessionManager() util.SessionManager
 
-	// RefreshTxnCtx commits old transaction without retry,
-	// and creates a new transaction.
-	// now just for load data and batch insert.
-	RefreshTxnCtx(goctx.Context) error
-
 	// ActivePendingTxn receives the pending transaction from the transaction channel.
 	// It should be called right before we builds an executor.
 	ActivePendingTxn() error
@@ -62,11 +56,29 @@ type Context interface {
 	// It should be called right before we builds an executor.
 	InitTxnWithStartTS(startTS uint64) error
 
-	// GetStore returns the store of session.
-	GetStore() kv.Storage
+	// Done returns a channel for cancelation, the same as standard context.Context.
+	// See https://godoc.org/context for more examples of how to use it.
+	Done() <-chan struct{}
+}
 
-	// PreparedPlanCache returns the cache of the physical plan
-	PreparedPlanCache() *kvcache.SimpleLRUCache
+// CtxForCancel implements the standard Go context.Context interface.
+type CtxForCancel struct {
+	Context
+}
+
+// Value implements the standard Go context.Context interface.
+func (ctx CtxForCancel) Value(interface{}) interface{} {
+	return nil
+}
+
+// Deadline implements the standard Go context.Context interface.
+func (ctx CtxForCancel) Deadline() (deadline time.Time, ok bool) {
+	return
+}
+
+// Err implements the standard Go context.Context interface.
+func (ctx CtxForCancel) Err() error {
+	return nil
 }
 
 type basicCtxType int
@@ -77,8 +89,6 @@ func (t basicCtxType) String() string {
 		return "query_string"
 	case Initing:
 		return "initing"
-	case LastExecuteDDL:
-		return "last_execute_ddl"
 	}
 	return "unknown"
 }
@@ -87,8 +97,6 @@ func (t basicCtxType) String() string {
 const (
 	// QueryString is the key for original query string.
 	QueryString basicCtxType = 1
-	// Initing is the key for indicating if the server is running bootstrap or upgrade job.
+	// Initing is the key for indicating if the server is running bootstrap or upgrad job.
 	Initing basicCtxType = 2
-	// LastExecuteDDL is the key for whether the session execute a ddl command last time.
-	LastExecuteDDL basicCtxType = 3
 )

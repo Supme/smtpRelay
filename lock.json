@@ -1,10 +1,10 @@
 {
-    "memo": "70573d7eb59011524d3644b24218e53b36cf60a0ec7cba992bbf6f2f958359f2",
+    "memo": "26c5ac0668ae55ca385dbd9de459c5208d5a8afc44b624b3d7b15b7e50405d1a",
     "projects": [
         {
             "name": "github.com/BurntSushi/toml",
             "branch": "master",
-            "revision": "a368813c5e648fee92e5f6c30e3944ff9d5e8895",
+            "revision": "d94612f9fc140360834f9742158c70b5c5b5535b",
             "packages": [
                 "."
             ]
@@ -12,35 +12,39 @@
         {
             "name": "github.com/denisenkom/go-mssqldb",
             "branch": "master",
-            "revision": "8a15d1bb0c8eaa4b870c016b312de5b50b493b4e",
+            "revision": "2c6544812a77396578c2c2325ce320c36f76198a",
             "packages": [
                 "."
             ]
         },
         {
             "name": "github.com/go-sql-driver/mysql",
-            "version": "v1.3",
-            "revision": "a0583e0143b1624142adab07e0e97fe106d99561",
+            "branch": "master",
+            "revision": "14f4292c08c0daf077adddd5824cffc82a797ff4",
             "packages": [
                 "."
             ]
         },
         {
-            "name": "github.com/jinzhu/gorm",
-            "version": "v1.0",
-            "revision": "5174cc5c242a728b435ea2be8a2f7f998e15429b",
+            "name": "github.com/go-xorm/builder",
+            "branch": "master",
+            "revision": "c6e604e9c7b7461715091e14ad0c242ec44c26e4",
             "packages": [
-                ".",
-                "dialects/mssql",
-                "dialects/mysql",
-                "dialects/postgres",
-                "dialects/sqlite"
+                "."
             ]
         },
         {
-            "name": "github.com/jinzhu/inflection",
+            "name": "github.com/go-xorm/core",
             "branch": "master",
-            "revision": "1c35d901db3da928c72a72d8458480cc9ade058f",
+            "revision": "e8409d73255791843585964791443dbad877058c",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/go-xorm/xorm",
+            "branch": "master",
+            "revision": "a55bded5185d3966a1906b0a48ef72281629809c",
             "packages": [
                 "."
             ]
@@ -48,16 +52,15 @@
         {
             "name": "github.com/lib/pq",
             "branch": "master",
-            "revision": "83612a56d3dd153a94a629cd64925371c9adad78",
+            "revision": "2704adc878c21e1329f46f6e56a1c387d788ff94",
             "packages": [
-                ".",
-                "hstore"
+                "."
             ]
         },
         {
             "name": "github.com/mattn/go-sqlite3",
-            "version": "v1.4.0",
-            "revision": "ed69081a91fd053f17672236b0dd52ba7485e1a3",
+            "branch": "master",
+            "revision": "d5ffb5c0cca8778699a929b236766f4a7af674e8",
             "packages": [
                 "."
             ]
@@ -65,7 +68,7 @@
         {
             "name": "github.com/pingcap/tidb",
             "branch": "master",
-            "revision": "be60bcfbc36f5dfdec9b840d17938018da1f8a0a",
+            "revision": "1513adc986aff784959951ccbd5035b3f413006b",
             "packages": [
                 "_vendor/src/github.com/juju/errors"
             ]
@@ -89,7 +92,7 @@
         {
             "name": "github.com/toorop/go-dkim",
             "branch": "master",
-            "revision": "83672023c79e6b352bf9d4908e6c060c7a24323c",
+            "revision": "43c1bb05e85404d07a5020ad38c6b67b3a039b86",
             "packages": [
                 "."
             ]
@@ -115,7 +118,7 @@
         {
             "name": "golang.org/x/text",
             "branch": "master",
-            "revision": "57961680700a5336d15015c8c50686ca5ba362a4",
+            "revision": "88f656faf3f37f690df1a32515b479415e1a6769",
             "packages": [
                 "secure/bidirule",
                 "unicode/bidi",

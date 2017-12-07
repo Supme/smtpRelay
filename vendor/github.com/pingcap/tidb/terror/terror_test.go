@@ -33,11 +33,6 @@ var _ = Suite(&testTErrorSuite{})
 type testTErrorSuite struct {
 }
 
-func (s *testTErrorSuite) TestErrCode(c *C) {
-	c.Assert(CodeMissConnectionID, Equals, ErrCode(1))
-	c.Assert(CodeResultUndetermined, Equals, ErrCode(2))
-}
-
 func (s *testTErrorSuite) TestTError(c *C) {
 	defer testleak.AfterTest(c)()
 	c.Assert(ClassParser.String(), Not(Equals), "")
@@ -71,12 +66,6 @@ func (s *testTErrorSuite) TestTError(c *C) {
 	sqlErr := e.ToSQLError()
 	c.Assert(sqlErr.Message, Equals, "Duplicate entry '1' for key 'PRIMARY'")
 	c.Assert(sqlErr.Code, Equals, uint16(1062))
-
-	err := errors.Trace(ErrCritical.GenByArgs("test"))
-	c.Assert(ErrCritical.Equal(err), IsTrue)
-
-	err = errors.Trace(ErrCritical)
-	c.Assert(ErrCritical.Equal(err), IsTrue)
 }
 
 func (s *testTErrorSuite) TestJson(c *C) {

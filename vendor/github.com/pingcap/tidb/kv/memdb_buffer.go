@@ -16,8 +16,6 @@
 package kv
 
 import (
-	"sync/atomic"
-
 	"github.com/juju/errors"
 	"github.com/pingcap/goleveldb/leveldb"
 	"github.com/pingcap/goleveldb/leveldb/comparer"
@@ -30,7 +28,7 @@ import (
 type memDbBuffer struct {
 	db              *memdb.DB
 	entrySizeLimit  int
-	bufferLenLimit  uint64
+	bufferLenLimit  int
 	bufferSizeLimit int
 }
 
@@ -44,7 +42,7 @@ func NewMemDbBuffer() MemBuffer {
 	return &memDbBuffer{
 		db:              memdb.New(comparer.DefaultComparer, 4*1024),
 		entrySizeLimit:  TxnEntrySizeLimit,
-		bufferLenLimit:  atomic.LoadUint64(&TxnEntryCountLimit),
+		bufferLenLimit:  TxnEntryCountLimit,
 		bufferSizeLimit: TxnTotalSizeLimit,
 	}
 }
@@ -57,10 +55,7 @@ func (m *memDbBuffer) Seek(k Key) (Iterator, error) {
 	} else {
 		i = &memDbIter{iter: m.db.NewIterator(&util.Range{Start: []byte(k)}), reverse: false}
 	}
-	err := i.Next()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+	i.Next()
 	return i, nil
 }
 
@@ -97,7 +92,7 @@ func (m *memDbBuffer) Set(k Key, v []byte) error {
 	if m.Size() > m.bufferSizeLimit {
 		return ErrTxnTooLarge.Gen("transaction too large, size:%d", m.Size())
 	}
-	if m.Len() > int(m.bufferLenLimit) {
+	if m.Len() > m.bufferLenLimit {
 		return ErrTxnTooLarge.Gen("transaction too large, len:%d", m.Len())
 	}
 	return errors.Trace(err)
@@ -147,25 +142,4 @@ func (i *memDbIter) Value() []byte {
 // Close Implements the Iterator Close.
 func (i *memDbIter) Close() {
 	i.iter.Release()
-}
-
-// WalkMemBuffer iterates all buffered kv pairs in memBuf
-func WalkMemBuffer(memBuf MemBuffer, f func(k Key, v []byte) error) error {
-	iter, err := memBuf.Seek(nil)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	defer iter.Close()
-	for iter.Valid() {
-		if err = f(iter.Key(), iter.Value()); err != nil {
-			return errors.Trace(err)
-		}
-		err = iter.Next()
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-
-	return nil
 }

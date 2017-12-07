@@ -19,11 +19,12 @@ import (
 	"net/http"
 	"sync"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
+	"github.com/pingcap/pd/pd-client"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/store/tikv"
 	"github.com/pingcap/tidb/util/printer"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -33,34 +34,45 @@ var once sync.Once
 const defaultStatusAddr = ":10080"
 
 func (s *Server) startStatusHTTP() {
+	// prepare region cache for region http server
+	pdClient, err := s.getPdClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	once.Do(func() {
-		go s.startHTTPServer()
+		go s.startHTTPServer(pdClient)
 	})
 }
 
-func (s *Server) startHTTPServer() {
+func (s *Server) getPdClient() (pd.Client, error) {
+	if s.cfg.Store != "tikv" {
+		return nil, nil
+	}
+	path := fmt.Sprintf("%s://%s", s.cfg.Store, s.cfg.StorePath)
+	etcdAddrs, err := tikv.ParseEtcdAddr(path)
+	if err != nil {
+		return nil, err
+	}
+	client, err := pd.NewClient(etcdAddrs)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return client, nil
+}
+
+func (s *Server) startHTTPServer(pdClient pd.Client) {
 	router := mux.NewRouter()
 	router.HandleFunc("/status", s.handleStatus)
 	// HTTP path for prometheus.
 	router.Handle("/metrics", prometheus.Handler())
 
-	if s.cfg.Store == "tikv" {
-		tikvHandler := s.newRegionHandler()
-		// HTTP path for regions
-		router.Handle("/tables/{db}/{table}/regions", tableHandler{tikvHandler, opTableRegions})
-		router.Handle("/tables/{db}/{table}/disk-usage", tableHandler{tikvHandler, opTableDiskUsage})
-		router.Handle("/regions/meta", tikvHandler)
-		router.Handle("/regions/{regionID}", tikvHandler)
-		router.Handle("/mvcc/key/{db}/{table}/{recordID}", mvccTxnHandler{tikvHandler, opMvccGetByKey})
-		router.Handle("/mvcc/txn/{startTS}/{db}/{table}", mvccTxnHandler{tikvHandler, opMvccGetByTxn})
-		router.Handle("/mvcc/txn/{startTS}", mvccTxnHandler{tikvHandler, opMvccGetByTxn})
-		router.Handle("/mvcc/hex/{hexKey}", mvccTxnHandler{tikvHandler, opMvccGetByHex})
-		router.Handle("/schema", schemaHandler{tikvHandler})
-		router.Handle("/schema/{db}", schemaHandler{tikvHandler})
-		router.Handle("/schema/{db}/{table}", schemaHandler{tikvHandler})
-	}
-	addr := fmt.Sprintf(":%d", s.cfg.Status.StatusPort)
-	if s.cfg.Status.StatusPort == 0 {
+	// HTTP path for regions
+	router.Handle("/tables/{db}/{table}/regions", s.newTableRegionsHandler(pdClient))
+	router.Handle("/regions/{regionID}", s.newRegionHandler(pdClient))
+
+	addr := s.cfg.StatusAddr
+	if len(addr) == 0 {
 		addr = defaultStatusAddr
 	}
 	log.Infof("Listening on %v for status and metrics report.", addr)
@@ -91,7 +103,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Error("Encode json error", err)
 	} else {
-		_, err = w.Write(js)
-		terror.Log(errors.Trace(err))
+		w.Write(js)
 	}
 }

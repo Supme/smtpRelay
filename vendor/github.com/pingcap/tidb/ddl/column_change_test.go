@@ -26,11 +26,10 @@ import (
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/table"
-	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/mock"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/testutil"
-	goctx "golang.org/x/net/context"
+	"github.com/pingcap/tidb/util/types"
 )
 
 var _ = Suite(&testColumnChangeSuite{})
@@ -55,7 +54,7 @@ func (s *testColumnChangeSuite) SetUpSuite(c *C) {
 
 func (s *testColumnChangeSuite) TestColumnChange(c *C) {
 	defer testleak.AfterTest(c)()
-	d := testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
+	d := newDDL(s.store, nil, nil, testLease)
 	defer d.Stop()
 	// create table t (c1 int, c2 int);
 	tblInfo := testTableInfo(c, d, "t", 2)
@@ -66,13 +65,13 @@ func (s *testColumnChangeSuite) TestColumnChange(c *C) {
 	// insert t values (1, 2);
 	originTable := testGetTable(c, d, s.dbInfo.ID, tblInfo.ID)
 	row := types.MakeDatums(1, 2)
-	h, err := originTable.AddRecord(ctx, row, false)
+	h, err := originTable.AddRecord(ctx, row)
 	c.Assert(err, IsNil)
-	err = ctx.Txn().Commit(goctx.Background())
+	err = ctx.Txn().Commit()
 	c.Assert(err, IsNil)
 
 	var mu sync.Mutex
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	// set up hook
 	prevState := model.StateNone
 	var (
@@ -120,12 +119,12 @@ func (s *testColumnChangeSuite) TestColumnChange(c *C) {
 			}
 			mu.Unlock()
 		}
-		err = hookCtx.Txn().Commit(goctx.Background())
+		err = hookCtx.Txn().Commit()
 		if err != nil {
 			checkErr = errors.Trace(err)
 		}
 	}
-	d.SetHook(tc)
+	d.setHook(tc)
 	defaultValue := int64(3)
 	job := testCreateColumn(c, ctx, d, s.dbInfo, tblInfo, "c3", &ast.ColumnPosition{Tp: ast.ColumnPositionNone}, defaultValue)
 	c.Assert(errors.ErrorStack(checkErr), Equals, "")
@@ -139,7 +138,7 @@ func (s *testColumnChangeSuite) TestColumnChange(c *C) {
 
 func (s *testColumnChangeSuite) testAddColumnNoDefault(c *C, ctx context.Context, d *ddl, tblInfo *model.TableInfo) {
 	d.Stop()
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	// set up hook
 	prevState := model.StateNone
 	var checkErr error
@@ -167,18 +166,18 @@ func (s *testColumnChangeSuite) testAddColumnNoDefault(c *C, ctx context.Context
 			if err != nil {
 				checkErr = errors.Trace(err)
 			}
-			_, err = writeOnlyTable.AddRecord(hookCtx, types.MakeDatums(10, 10), false)
+			_, err = writeOnlyTable.AddRecord(hookCtx, types.MakeDatums(10, 10))
 			if err != nil {
 				checkErr = errors.Trace(err)
 			}
 		}
-		err = hookCtx.Txn().Commit(goctx.TODO())
+		err = hookCtx.Txn().Commit()
 		if err != nil {
 			checkErr = errors.Trace(err)
 		}
 	}
-	d.SetHook(tc)
-	d.start(goctx.Background())
+	d.setHook(tc)
+	d.start()
 	job := testCreateColumn(c, ctx, d, s.dbInfo, tblInfo, "c3", &ast.ColumnPosition{Tp: ast.ColumnPositionNone}, nil)
 	c.Assert(errors.ErrorStack(checkErr), Equals, "")
 	testCheckJobDone(c, d, job, true)
@@ -187,7 +186,7 @@ func (s *testColumnChangeSuite) testAddColumnNoDefault(c *C, ctx context.Context
 func (s *testColumnChangeSuite) testColumnDrop(c *C, ctx context.Context, d *ddl, tbl table.Table) {
 	d.Stop()
 	dropCol := tbl.Cols()[2]
-	tc := &TestDDLCallback{}
+	tc := &testDDLCallback{}
 	// set up hook
 	prevState := model.StateNone
 	var checkErr error
@@ -206,8 +205,8 @@ func (s *testColumnChangeSuite) testColumnDrop(c *C, ctx context.Context, d *ddl
 			}
 		}
 	}
-	d.SetHook(tc)
-	d.start(goctx.Background())
+	d.setHook(tc)
+	d.start()
 	c.Assert(errors.ErrorStack(checkErr), Equals, "")
 	testDropColumn(c, ctx, d, s.dbInfo, tbl.Meta(), dropCol.Name.L, false)
 }
@@ -218,7 +217,7 @@ func (s *testColumnChangeSuite) checkAddWriteOnly(d *ddl, ctx context.Context, d
 	if err != nil {
 		return errors.Trace(err)
 	}
-	_, err = writeOnlyTable.AddRecord(ctx, types.MakeDatums(2, 3), false)
+	_, err = writeOnlyTable.AddRecord(ctx, types.MakeDatums(2, 3))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -251,7 +250,7 @@ func (s *testColumnChangeSuite) checkAddWriteOnly(d *ddl, ctx context.Context, d
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = writeOnlyTable.UpdateRecord(ctx, h, types.MakeDatums(1, 2, 3), types.MakeDatums(2, 2, 3), touchedSlice(writeOnlyTable))
+	err = writeOnlyTable.UpdateRecord(ctx, h, types.MakeDatums(1, 2), types.MakeDatums(2, 2), touchedMap(writeOnlyTable))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -278,10 +277,10 @@ func (s *testColumnChangeSuite) checkAddWriteOnly(d *ddl, ctx context.Context, d
 	return errors.Trace(err)
 }
 
-func touchedSlice(t table.Table) []bool {
-	touched := make([]bool, 0, len(t.WritableCols()))
-	for range t.WritableCols() {
-		touched = append(touched, true)
+func touchedMap(t table.Table) map[int]bool {
+	touched := make(map[int]bool)
+	for _, col := range t.Cols() {
+		touched[col.Offset] = true
 	}
 	return touched
 }
@@ -292,7 +291,7 @@ func (s *testColumnChangeSuite) checkAddPublic(d *ddl, ctx context.Context, writ
 	if err != nil {
 		return errors.Trace(err)
 	}
-	h, err := publicTable.AddRecord(ctx, types.MakeDatums(4, 4, 4), false)
+	h, err := publicTable.AddRecord(ctx, types.MakeDatums(4, 4, 4))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -309,7 +308,7 @@ func (s *testColumnChangeSuite) checkAddPublic(d *ddl, ctx context.Context, writ
 		return errors.Errorf("%v", oldRow)
 	}
 	newRow := types.MakeDatums(3, 4, oldRow[2].GetValue())
-	err = writeOnlyTable.UpdateRecord(ctx, h, oldRow, newRow, touchedSlice(writeOnlyTable))
+	err = writeOnlyTable.UpdateRecord(ctx, h, oldRow, newRow, touchedMap(writeOnlyTable))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -362,7 +361,7 @@ func checkResult(ctx context.Context, t table.Table, cols []*table.Column, rows 
 }
 
 func datumsToInterfaces(datums []types.Datum) []interface{} {
-	ifs := make([]interface{}, 0, len(datums))
+	var ifs []interface{}
 	for _, d := range datums {
 		ifs = append(ifs, d.GetValue())
 	}

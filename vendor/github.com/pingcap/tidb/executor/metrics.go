@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
@@ -47,13 +47,10 @@ func init() {
 	prometheus.MustRegister(expensiveQueryCounter)
 }
 
-func stmtCount(node ast.StmtNode, p plan.Plan, inRestrictedSQL bool) bool {
-	var isExpensive bool
-	stmtLabel := StatementLabel(node, p, &isExpensive)
-	if !inRestrictedSQL && stmtLabel != IGNORE {
+func stmtCount(node ast.StmtNode, p plan.Plan) {
+	if stmtLabel := StatementLabel(node, p); stmtLabel != IGNORE {
 		stmtNodeCounter.WithLabelValues(stmtLabel).Inc()
 	}
-	return isExpensive
 }
 
 const (
@@ -110,7 +107,7 @@ const (
 )
 
 // StatementLabel generates a label for a statement.
-func StatementLabel(node ast.StmtNode, p plan.Plan, isExpensive *bool) string {
+func StatementLabel(node ast.StmtNode, p plan.Plan) string {
 	switch x := node.(type) {
 	case *ast.AlterTableStmt:
 		return AlterTable
@@ -129,7 +126,7 @@ func StatementLabel(node ast.StmtNode, p plan.Plan, isExpensive *bool) string {
 	case *ast.CreateUserStmt:
 		return CreateUser
 	case *ast.DeleteStmt:
-		return getDeleteStmtLabel(x, p, isExpensive)
+		return getDeleteStmtLabel(x, p)
 	case *ast.DropDatabaseStmt:
 		return DropDatabase
 	case *ast.DropIndexStmt:
@@ -148,7 +145,7 @@ func StatementLabel(node ast.StmtNode, p plan.Plan, isExpensive *bool) string {
 	case *ast.RollbackStmt:
 		return RollBack
 	case *ast.SelectStmt:
-		return getSelectStmtLabel(x, p, isExpensive)
+		return getSelectStmtLabel(x, p)
 	case *ast.SetStmt, *ast.SetPwdStmt:
 		return Set
 	case *ast.ShowStmt:
@@ -156,7 +153,7 @@ func StatementLabel(node ast.StmtNode, p plan.Plan, isExpensive *bool) string {
 	case *ast.TruncateTableStmt:
 		return TruncateTable
 	case *ast.UpdateStmt:
-		return getUpdateStmtLabel(x, p, isExpensive)
+		return getUpdateStmtLabel(x, p)
 	case *ast.GrantStmt:
 		return Grant
 	case *ast.RevokeStmt:
@@ -167,30 +164,30 @@ func StatementLabel(node ast.StmtNode, p plan.Plan, isExpensive *bool) string {
 	return "other"
 }
 
-func getSelectStmtLabel(stmt *ast.SelectStmt, p plan.Plan, isExpensive *bool) string {
+func getSelectStmtLabel(stmt *ast.SelectStmt, p plan.Plan) string {
 	var attributes stmtAttributes
 	attributes.fromSelectStmt(stmt)
 	attributes.fromPlan(p)
 	stmtLabel := Select + attributes.toLabel()
-	attributes.logExpensiveStmt(stmtLabel, stmt.Text(), isExpensive)
+	attributes.logExpensiveStmt(stmtLabel, stmt.Text())
 	return stmtLabel
 }
 
-func getDeleteStmtLabel(stmt *ast.DeleteStmt, p plan.Plan, isExpensive *bool) string {
+func getDeleteStmtLabel(stmt *ast.DeleteStmt, p plan.Plan) string {
 	var attributes stmtAttributes
 	attributes.fromDeleteStmt(stmt)
 	attributes.fromPlan(p)
 	stmtLabel := Delete + attributes.toLabel()
-	attributes.logExpensiveStmt(stmtLabel, stmt.Text(), isExpensive)
+	attributes.logExpensiveStmt(stmtLabel, stmt.Text())
 	return stmtLabel
 }
 
-func getUpdateStmtLabel(stmt *ast.UpdateStmt, p plan.Plan, isExpensive *bool) string {
+func getUpdateStmtLabel(stmt *ast.UpdateStmt, p plan.Plan) string {
 	var attributes stmtAttributes
 	attributes.fromUpdateStmt(stmt)
 	attributes.fromPlan(p)
 	stmtLabel := Update + attributes.toLabel()
-	attributes.logExpensiveStmt(stmtLabel, stmt.Text(), isExpensive)
+	attributes.logExpensiveStmt(stmtLabel, stmt.Text())
 	return stmtLabel
 }
 
@@ -238,7 +235,7 @@ func (pa *stmtAttributes) fromPlan(p plan.Plan) {
 	switch x := p.(type) {
 	case *plan.PhysicalApply:
 		pa.hasApply = true
-	case *plan.PhysicalHashAgg, *plan.PhysicalStreamAgg:
+	case *plan.PhysicalAggregation:
 		pa.hasAggregate = true
 	case *plan.PhysicalHashJoin:
 		pa.hasJoin = true
@@ -253,33 +250,12 @@ func (pa *stmtAttributes) fromPlan(p plan.Plan) {
 		if len(x.AccessCondition) > 0 {
 			pa.hasRange = true
 		}
+		if x.DoubleRead {
+			pa.hasIndexDouble = true
+		}
 		pa.setIsSystemTable(x.DBName)
 	case *plan.PhysicalHashSemiJoin:
 		pa.hasJoin = true
-	case *plan.Insert:
-		if x.SelectPlan != nil {
-			pa.fromPlan(x.SelectPlan)
-		}
-	case *plan.Delete:
-		pa.fromPlan(x.SelectPlan)
-	case *plan.Update:
-		pa.fromPlan(x.SelectPlan)
-	case *plan.PhysicalTableReader:
-		for _, child := range x.TablePlans {
-			pa.fromPlan(child)
-		}
-	case *plan.PhysicalIndexReader:
-		for _, child := range x.IndexPlans {
-			pa.fromPlan(child)
-		}
-	case *plan.PhysicalIndexLookUpReader:
-		for _, child := range x.IndexPlans {
-			pa.fromPlan(child)
-		}
-		for _, child := range x.TablePlans {
-			pa.fromPlan(child)
-		}
-		pa.hasIndexDouble = true
 	}
 	children := p.Children()
 	for _, child := range children {
@@ -307,7 +283,6 @@ const (
 	attrAggregate = "Agg"
 )
 
-// toLabel ...
 // Not all attributes is used to create the label, because we don't want too many labels.
 func (pa *stmtAttributes) toLabel() string {
 	var attrs []string
@@ -354,7 +329,7 @@ func (pa *stmtAttributes) isExpensiveStmt() bool {
 	return true
 }
 
-func (pa *stmtAttributes) logExpensiveStmt(stmtLabel string, sql string, isExpensive *bool) {
+func (pa *stmtAttributes) logExpensiveStmt(stmtLabel string, sql string) {
 	if pa.isExpensiveStmt() {
 		const logSQLLen = 1024
 		if len(sql) > logSQLLen {
@@ -362,6 +337,5 @@ func (pa *stmtAttributes) logExpensiveStmt(stmtLabel string, sql string, isExpen
 		}
 		log.Warnf("[EXPENSIVE_QUERY] %s", sql)
 		expensiveQueryCounter.WithLabelValues(stmtLabel).Inc()
-		*isExpensive = true
 	}
 }

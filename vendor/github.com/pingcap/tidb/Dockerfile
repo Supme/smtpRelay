@@ -1,22 +1,11 @@
-# Builder image
-FROM golang:1.9-alpine as builder
-
-RUN apk add --no-cache \
-    make \
-    git
+FROM golang:1.7
 
 COPY . /go/src/github.com/pingcap/tidb
 
-WORKDIR /go/src/github.com/pingcap/tidb/
-
-RUN make
-
-# Executable image
-FROM scratch
-
-COPY --from=builder /go/src/github.com/pingcap/tidb/bin/tidb-server /tidb-server
-
-WORKDIR /
+RUN cd /go/src/github.com/pingcap/tidb && \
+    make && \
+    mv bin/tidb-server /tidb-server && \
+    make clean
 
 EXPOSE 4000
 

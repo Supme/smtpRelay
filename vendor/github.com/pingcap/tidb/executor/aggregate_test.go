@@ -14,16 +14,54 @@
 package executor_test
 
 import (
+	"fmt"
+
 	. "github.com/pingcap/check"
+	"github.com/pingcap/tidb/ast"
+	"github.com/pingcap/tidb/executor"
+	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/plan"
-	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/util/mock"
 	"github.com/pingcap/tidb/util/testkit"
+	"github.com/pingcap/tidb/util/testleak"
+	"github.com/pingcap/tidb/util/types"
 )
+
+type MockExec struct {
+	fields    []*ast.ResultField
+	Rows      []*executor.Row
+	curRowIdx int
+}
+
+func (m *MockExec) Schema() *expression.Schema {
+	return expression.NewSchema()
+}
+
+func (m *MockExec) Next() (*executor.Row, error) {
+	if m.curRowIdx >= len(m.Rows) {
+		return nil, nil
+	}
+	r := m.Rows[m.curRowIdx]
+	m.curRowIdx++
+	if len(m.fields) > 0 {
+		for i, d := range r.Data {
+			m.fields[i].Expr.SetValue(d.GetValue())
+		}
+	}
+	return r, nil
+}
+
+func (m *MockExec) Close() error {
+	m.curRowIdx = 0
+	return nil
+}
 
 func (s *testSuite) TestAggregation(c *C) {
 	plan.JoinConcurrency = 1
 	defer func() {
 		plan.JoinConcurrency = 5
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
 	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
@@ -36,9 +74,7 @@ func (s *testSuite) TestAggregation(c *C) {
 	tk.MustExec("insert t values (1, 1)")
 	tk.MustExec("insert t values (3, 2)")
 	tk.MustExec("insert t values (4, 3)")
-	result := tk.MustQuery("select count(*) from t")
-	result.Check(testkit.Rows("7"))
-	result = tk.MustQuery("select count(*) from t group by d")
+	result := tk.MustQuery("select count(*) from t group by d")
 	result.Check(testkit.Rows("3", "2", "2"))
 	result = tk.MustQuery("select distinct 99 from t group by d having d > 0")
 	result.Check(testkit.Rows("99"))
@@ -127,11 +163,6 @@ func (s *testSuite) TestAggregation(c *C) {
 	result.Check(testkit.Rows("-1", "-1", "-2", "-2"))
 	result = tk.MustQuery("select 1-d as d from t having d + 1 < 0 order by d + 1")
 	result.Check(testkit.Rows("-2", "-2"))
-	tk.MustExec("drop table if exists t")
-	tk.MustExec("create table t (keywords varchar(20), type int)")
-	tk.MustExec("insert into t values('测试', 1), ('test', 2)")
-	result = tk.MustQuery("select group_concat(keywords) from t group by type order by type")
-	result.Check(testkit.Rows("测试", "test"))
 	tk.MustExec("drop table if exists t")
 	tk.MustExec("create table t (c int, d int)")
 	tk.MustExec("insert t values (1, -1)")
@@ -239,7 +270,7 @@ func (s *testSuite) TestAggregation(c *C) {
 
 	result = tk.MustQuery("select count(*) from information_schema.columns")
 	// When adding new memory table in information_schema, please update this variable.
-	columnCountOfAllInformationSchemaTables := "743"
+	columnCountOfAllInformationSchemaTables := "561"
 	result.Check(testkit.Rows(columnCountOfAllInformationSchemaTables))
 
 	tk.MustExec("drop table if exists t1")
@@ -256,22 +287,102 @@ func (s *testSuite) TestAggregation(c *C) {
 	result.Check(testkit.Rows("1"))
 	result = tk.MustQuery("select sum(c1) k from (select * from t1 union all select * from t2)t group by c1 * 2 order by k")
 	result.Check(testkit.Rows("1", "3", "4"))
-	tk.MustExec("drop table if exists t")
-	tk.MustExec("create table t (a int, b int, c int)")
-	tk.MustExec("insert into t values(1, 2, 3), (1, 2, 4)")
-	result = tk.MustQuery("select count(distinct c), count(distinct a,b) from t")
-	result.Check(testkit.Rows("2 1"))
+}
 
-	tk.MustExec("create table idx_agg (a int, b int, index (b))")
-	tk.MustExec("insert idx_agg values (1, 1), (1, 2), (2, 2)")
-	tk.MustQuery("select sum(a), sum(b) from idx_agg where b > 0 and b < 10").Check(testkit.Rows("4 5"))
-
-	// test without any aggregate function
-	tk.MustQuery("select 10 from idx_agg group by b").Check(testkit.Rows("10", "10"))
-	tk.MustQuery("select 11 from idx_agg group by a").Check(testkit.Rows("11", "11"))
+func (s *testSuite) TestStreamAgg(c *C) {
+	col := &expression.Column{
+		Index: 1,
+	}
+	gbyCol := &expression.Column{
+		Index: 0,
+	}
+	sumAgg := expression.NewAggFunction(ast.AggFuncSum, []expression.Expression{col}, false)
+	cntAgg := expression.NewAggFunction(ast.AggFuncCount, []expression.Expression{col}, false)
+	avgAgg := expression.NewAggFunction(ast.AggFuncAvg, []expression.Expression{col}, false)
+	maxAgg := expression.NewAggFunction(ast.AggFuncMax, []expression.Expression{col}, false)
+	cases := []struct {
+		aggFunc expression.AggregationFunction
+		result  string
+		input   [][]interface{}
+		result1 []string
+	}{
+		{
+			sumAgg,
+			"<nil>",
+			[][]interface{}{
+				{0, 1}, {0, nil}, {1, 2}, {1, 3},
+			},
+			[]string{
+				"1", "5",
+			},
+		},
+		{
+			cntAgg,
+			"0",
+			[][]interface{}{
+				{0, 1}, {0, nil}, {1, 2}, {1, 3},
+			},
+			[]string{
+				"1", "2",
+			},
+		},
+		{
+			avgAgg,
+			"<nil>",
+			[][]interface{}{
+				{0, 1}, {0, nil}, {1, 2}, {1, 3},
+			},
+			[]string{
+				"1.0000", "2.5000",
+			},
+		},
+		{
+			maxAgg,
+			"<nil>",
+			[][]interface{}{
+				{0, 1}, {0, nil}, {1, 2}, {1, 3},
+			},
+			[]string{
+				"1", "3",
+			},
+		},
+	}
+	ctx := mock.NewContext()
+	for _, ca := range cases {
+		mock := &MockExec{}
+		e := &executor.StreamAggExec{
+			AggFuncs: []expression.AggregationFunction{ca.aggFunc},
+			Src:      mock,
+			Ctx:      ctx,
+		}
+		row, err := e.Next()
+		c.Check(err, IsNil)
+		c.Check(row, NotNil)
+		c.Assert(fmt.Sprintf("%v", row.Data[0].GetValue()), Equals, ca.result)
+		e.GroupByItems = append(e.GroupByItems, gbyCol)
+		e.Close()
+		row, err = e.Next()
+		c.Check(err, IsNil)
+		c.Check(row, IsNil)
+		e.Close()
+		for _, input := range ca.input {
+			data := types.MakeDatums(input...)
+			mock.Rows = append(mock.Rows, &executor.Row{Data: data})
+		}
+		for _, res := range ca.result1 {
+			row, err = e.Next()
+			c.Check(err, IsNil)
+			c.Check(row, NotNil)
+			c.Assert(fmt.Sprintf("%v", row.Data[0].GetValue()), Equals, res)
+		}
+	}
 }
 
 func (s *testSuite) TestAggPrune(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists t")
@@ -290,18 +401,27 @@ func (s *testSuite) TestAggPrune(c *C) {
 }
 
 func (s *testSuite) TestSelectDistinct(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	s.fillData(tk, "select_distinct_test")
 
 	tk.MustExec("begin")
 	r := tk.MustQuery("select distinct name from select_distinct_test;")
-	r.Check(testkit.Rows("hello"))
+	rowStr := fmt.Sprintf("%v", []byte("hello"))
+	r.Check(testkit.Rows(rowStr))
 	tk.MustExec("commit")
 
 }
 
 func (s *testSuite) TestAggPushDown(c *C) {
+	defer func() {
+		s.cleanEnv(c)
+		testleak.AfterTest(c)()
+	}()
 	tk := testkit.NewTestKit(c, s.store)
 	tk.MustExec("use test")
 	tk.MustExec("drop table if exists t, tt")
@@ -311,129 +431,4 @@ func (s *testSuite) TestAggPushDown(c *C) {
 	tk.MustExec("insert into tt values(1, 2, 1)")
 	tk.MustQuery("select max(a.b), max(b.b) from t a join tt b on a.a = b.a group by a.c").Check(testkit.Rows("1 2"))
 	tk.MustQuery("select a, count(b) from (select * from t union all select * from tt) k group by a").Check(testkit.Rows("1 2", "2 1"))
-}
-
-func (s *testSuite) TestOnlyFullGroupBy(c *C) {
-	tk := testkit.NewTestKit(c, s.store)
-	tk.MustExec("use test")
-	tk.MustExec("set sql_mode = 'ONLY_FULL_GROUP_BY'")
-	tk.MustExec("drop table if exists t")
-	tk.MustExec("create table t(a int not null primary key, b int not null, c int default null, d int not null, unique key I_b_c (b,c), unique key I_b_d (b,d))")
-	tk.MustExec("create table x(a int not null primary key, b int not null, c int default null, d int not null, unique key I_b_c (b,c), unique key I_b_d (b,d))")
-
-	// test AggregateFunc
-	tk.MustQuery("select max(a) from t group by d")
-	// test incompatible with sql_mode = ONLY_FULL_GROUP_BY
-	var err error
-	_, err = tk.Exec("select * from t group by d")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select b-c from t group by b+c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select (b-c)*(b+c), min(a) from t group by b+c, b-c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select b between c and d from t group by b,c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select case b when 1 then c when 2 then d else d end from t group by b,c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select c > (select b from t) from t group by b")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select c is null from t group by b")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select c is true from t group by b")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select (c+b)*d from t group by c,d")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select b in (c,d) from t group by b,c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select b like '%a' from t group by c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select c REGEXP '1.*' from t group by b")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select -b from t group by c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	// test compatible with sql_mode = ONLY_FULL_GROUP_BY
-	tk.MustQuery("select a from t group by a,b,c")
-	tk.MustQuery("select b from t group by b")
-	tk.MustQuery("select b as e from t group by b")
-	tk.MustQuery("select b+c from t group by b+c")
-	tk.MustQuery("select b+c, min(a) from t group by b+c, b-c")
-	tk.MustQuery("select b+c, min(a) from t group by b, c")
-	tk.MustQuery("select b+c from t group by b,c")
-	tk.MustQuery("select b between c and d from t group by b,c,d")
-	tk.MustQuery("select case b when 1 then c when 2 then d else d end from t group by b,c,d")
-	tk.MustQuery("select c > (select b from t) from t group by c")
-	tk.MustQuery("select exists (select * from t) from t group by d;")
-	tk.MustQuery("select c is null from t group by c")
-	tk.MustQuery("select c is true from t group by c")
-	tk.MustQuery("select (c+b)*d from t group by c,b,d")
-	tk.MustQuery("select b in (c,d) from t group by b,c,d")
-	tk.MustQuery("select b like '%a' from t group by b")
-	tk.MustQuery("select c REGEXP '1.*' from t group by c")
-	tk.MustQuery("select -b from t group by b")
-	// test functinal depend on primary key
-	tk.MustQuery("select * from t group by a")
-	// test functional depend on unique not null columns
-	tk.MustQuery("select * from t group by b,d")
-	// test functional depend on a unique null column
-	_, err = tk.Exec("select * from t group by b,c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	// test functional dependency derived from keys in where condition
-	tk.MustQuery("select * from t where c = d group by b, c")
-	tk.MustQuery("select t.*, x.* from t, x where t.a = x.a group by t.a")
-	tk.MustQuery("select t.*, x.* from t, x where t.b = x.b and t.d = x.d group by t.b, t.d")
-	tk.MustQuery("select t.*, x.* from t, x where t.b = x.a group by t.b, t.d")
-	tk.MustQuery("select t.b, x.* from t, x where t.b = x.a group by t.b")
-	_, err = tk.Exec("select t.*, x.* from t, x where t.c = x.a group by t.b, t.c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	// test functional dependency derived from keys in join
-	tk.MustQuery("select t.*, x.* from t inner join x on t.a = x.a group by t.a")
-	tk.MustQuery("select t.*, x.* from t inner join x  on (t.b = x.b and t.d = x.d) group by t.b, x.d")
-	tk.MustQuery("select t.b, x.* from t inner join x on t.b = x.b group by t.b, x.d")
-	tk.MustQuery("select t.b, x.* from t left join x on t.b = x.b group by t.b, x.d")
-	tk.MustQuery("select t.b, x.* from t left join x on x.b = t.b group by t.b, x.d")
-	tk.MustQuery("select x.b, t.* from t right join x on x.b = t.b group by x.b, t.d")
-	tk.MustQuery("select x.b, t.* from t right join x on t.b = x.b group by x.b, t.d")
-	_, err = tk.Exec("select t.b, x.* from t right join x on t.b = x.b group by t.b, x.d")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	_, err = tk.Exec("select t.b, x.* from t right join x on t.b = x.b group by t.b, x.d")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-
-	// FixMe: test functional dependency of derived table
-	//tk.MustQuery("select * from (select * from t) as e group by a")
-	//tk.MustQuery("select * from (select * from t) as e group by b,d")
-	//_, err = tk.Exec("select * from (select * from t) as e group by b,c")
-	//c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-
-	// test order by
-	tk.MustQuery("select c from t group by c,d order by d")
-	_, err = tk.Exec("select c from t group by c order by d")
-	c.Assert(terror.ErrorEqual(err, plan.ErrFieldNotInGroupBy), IsTrue)
-	// test ambiguous column
-	_, err = tk.Exec("select c from t,x group by t.c")
-	c.Assert(terror.ErrorEqual(err, plan.ErrAmbiguous), IsTrue)
-}
-
-func (s *testSuite) TestHaving(c *C) {
-	tk := testkit.NewTestKitWithInit(c, s.store)
-
-	tk.MustExec("set sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'")
-	tk.MustExec("drop table if exists t")
-	tk.MustExec("create table t (c1 int, c2 int, c3 int)")
-	tk.MustExec("insert into t values (1,2,3), (2, 3, 1), (3, 1, 2)")
-
-	tk.MustQuery("select c1 as c2, c3 from t having c2 = 2").Check(testkit.Rows("2 1"))
-	tk.MustQuery("select c1 as c2, c3 from t group by c2 having c2 = 2;").Check(testkit.Rows("1 3"))
-	tk.MustQuery("select c1 as c2, c3 from t group by c2 having sum(c2) = 2;").Check(testkit.Rows("1 3"))
-	tk.MustQuery("select c1 as c2, c3 from t group by c3 having sum(c2) = 2;").Check(testkit.Rows("1 3"))
-	tk.MustQuery("select c1 as c2, c3 from t group by c3 having sum(0) + c2 = 2;").Check(testkit.Rows("2 1"))
-	tk.MustQuery("select c1 as a from t having c1 = 1;").Check(testkit.Rows("1"))
-	tk.MustQuery("select t.c1 from t having c1 = 1;").Check(testkit.Rows("1"))
-	tk.MustQuery("select a.c1 from t as a having c1 = 1;").Check(testkit.Rows("1"))
-	tk.MustQuery("select c1 as a from t group by c3 having sum(a) = 1;").Check(testkit.Rows("1"))
-	tk.MustQuery("select c1 as a from t group by c3 having sum(a) + a = 2;").Check(testkit.Rows("1"))
-	tk.MustQuery("select a.c1 as c, a.c1 as d from t as a, t as b having c1 = 1 limit 1;").Check(testkit.Rows("1 1"))
-
-	tk.MustQuery("select sum(c1) from t group by c1 having sum(c1)").Check(testkit.Rows("1", "2", "3"))
-	tk.MustQuery("select sum(c1) - 1 from t group by c1 having sum(c1) - 1").Check(testkit.Rows("1", "2"))
-	tk.MustQuery("select 1 from t group by c1 having sum(abs(c2 + c3)) = c1").Check(testkit.Rows("1"))
 }

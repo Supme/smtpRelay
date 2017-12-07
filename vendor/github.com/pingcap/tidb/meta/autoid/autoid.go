@@ -18,9 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/cznic/mathutil"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/terror"
@@ -41,10 +40,6 @@ type Allocator interface {
 	// If allocIDs is true, it will allocate some IDs and save to the cache.
 	// If allocIDs is false, it will not allocate IDs.
 	Rebase(tableID, newBase int64, allocIDs bool) error
-	// Base return the current base of Allocator.
-	Base() int64
-	// End is only used for test.
-	End() int64
 }
 
 type allocator struct {
@@ -52,8 +47,7 @@ type allocator struct {
 	base  int64
 	end   int64
 	store kv.Storage
-	// dbID is current database's ID.
-	dbID int64
+	dbID  int64
 }
 
 // GetStep is only used by tests
@@ -61,71 +55,48 @@ func GetStep() int64 {
 	return step
 }
 
-// SetStep is only used by tests
-func SetStep(s int64) {
-	step = s
-}
-
-// Base implements autoid.Allocator Base interface.
-func (alloc *allocator) Base() int64 {
-	return alloc.base
-}
-
-// End implements autoid.Allocator End interface.
-func (alloc *allocator) End() int64 {
-	return alloc.end
-}
-
 // Rebase implements autoid.Allocator Rebase interface.
-// The requiredBase is the minimum base value after Rebase.
-// The real base may be greater than the required base.
-func (alloc *allocator) Rebase(tableID, requiredBase int64, allocIDs bool) error {
+func (alloc *allocator) Rebase(tableID, newBase int64, allocIDs bool) error {
 	if tableID == 0 {
 		return errInvalidTableID.Gen("Invalid tableID")
 	}
 
 	alloc.mu.Lock()
 	defer alloc.mu.Unlock()
-	if requiredBase <= alloc.base {
-		// Satisfied by alloc.base, nothing to do.
+	if newBase <= alloc.base {
 		return nil
 	}
-	if requiredBase <= alloc.end {
-		// Satisfied by alloc.end, need to updata alloc.base.
-		alloc.base = requiredBase
+	if newBase <= alloc.end {
+		alloc.base = newBase
 		return nil
 	}
-	var newBase, newEnd int64
-	err := kv.RunInNewTxn(alloc.store, true, func(txn kv.Transaction) error {
+
+	return kv.RunInNewTxn(alloc.store, true, func(txn kv.Transaction) error {
 		m := meta.NewMeta(txn)
-		currentEnd, err1 := m.GetAutoTableID(alloc.dbID, tableID)
-		if err1 != nil {
-			return errors.Trace(err1)
+		end, err := m.GetAutoTableID(alloc.dbID, tableID)
+		if err != nil {
+			return errors.Trace(err)
 		}
-		if allocIDs {
-			newBase = mathutil.MaxInt64(currentEnd, requiredBase)
-			newEnd = newBase + step
-		} else {
-			if currentEnd >= requiredBase {
-				newBase = currentEnd
-				newEnd = currentEnd
-				// Required base satisfied, we don't need to update KV.
-				return nil
-			}
-			// If we don't want to allocate IDs, for example when creating a table with a given base value,
-			// We need to make sure when other TiDB server allocates ID for the first time, requiredBase + 1
-			// will be allocated, so we need to increase the end to exactly the requiredBase.
-			newBase = requiredBase
-			newEnd = requiredBase
+
+		if newBase < end {
+			newBase = end
 		}
-		_, err1 = m.GenAutoTableID(alloc.dbID, tableID, newEnd-currentEnd)
-		return errors.Trace(err1)
+		newStep := newBase - end + step
+		if !allocIDs {
+			newStep = newBase - end
+		}
+		end, err = m.GenAutoTableID(alloc.dbID, tableID, newStep)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		alloc.end = end
+		alloc.base = newBase
+		if !allocIDs {
+			alloc.base = alloc.end
+		}
+		return nil
 	})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	alloc.base, alloc.end = newBase, newEnd
-	return nil
 }
 
 // Alloc implements autoid.Allocator Alloc interface.
@@ -136,17 +107,22 @@ func (alloc *allocator) Alloc(tableID int64) (int64, error) {
 	alloc.mu.Lock()
 	defer alloc.mu.Unlock()
 	if alloc.base == alloc.end { // step
-		var newBase, newEnd int64
 		err := kv.RunInNewTxn(alloc.store, true, func(txn kv.Transaction) error {
 			m := meta.NewMeta(txn)
-			var err1 error
-			newBase, err1 = m.GetAutoTableID(alloc.dbID, tableID)
+			base, err1 := m.GetAutoTableID(alloc.dbID, tableID)
 			if err1 != nil {
 				return errors.Trace(err1)
 			}
-			newEnd, err1 = m.GenAutoTableID(alloc.dbID, tableID, step)
+			end, err1 := m.GenAutoTableID(alloc.dbID, tableID, step)
 			if err1 != nil {
 				return errors.Trace(err1)
+			}
+
+			alloc.end = end
+			if end == step {
+				alloc.base = base
+			} else {
+				alloc.base = end - step
 			}
 			return nil
 		})
@@ -154,7 +130,6 @@ func (alloc *allocator) Alloc(tableID int64) (int64, error) {
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
-		alloc.base, alloc.end = newBase, newEnd
 	}
 
 	alloc.base++
@@ -172,16 +147,6 @@ type memoryAllocator struct {
 	base int64
 	end  int64
 	dbID int64
-}
-
-// Base implements autoid.Allocator Base interface.
-func (alloc *memoryAllocator) Base() int64 {
-	return alloc.base
-}
-
-// End implements autoid.Allocator End interface.
-func (alloc *memoryAllocator) End() int64 {
-	return alloc.end
 }
 
 // Rebase implements autoid.Allocator Rebase interface.

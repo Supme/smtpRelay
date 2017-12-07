@@ -48,10 +48,6 @@ const (
 	// those indices can be scanned concurrently, with the cost of higher system performance impact.
 	TiDBBuildStatsConcurrency = "tidb_build_stats_concurrency"
 
-	// TiDBCurrentTS is used to get the current transaction timestamp.
-	// It is read-only.
-	TiDBCurrentTS = "tidb_current_ts"
-
 	/* Session and global */
 
 	// tidb_distsql_scan_concurrency is used to set the concurrency of a distsql scan task.
@@ -59,12 +55,6 @@ const (
 	// Higher concurrency may reduce latency, but with the cost of higher memory usage and system performance impact.
 	// If the query has a LIMIT clause, high concurrency makes the system do much more work than needed.
 	TiDBDistSQLScanConcurrency = "tidb_distsql_scan_concurrency"
-
-	// tidb_index_join_batch_size is used to set the batch size of a index lookup join.
-	// The index lookup join fetches batches of data from outer executor and constructs ranges for inner executor.
-	// This value controls how much of data in a batch to do the index join.
-	// Large value may reduce the latency but consumes more system resource.
-	TiDBIndexJoinBatchSize = "tidb_index_join_batch_size"
 
 	// tidb_index_lookup_size is used for index lookup executor.
 	// The index lookup executor first scan a batch of handles from a index, then use those handles to lookup the table
@@ -80,45 +70,25 @@ const (
 	// Set this value higher may reduce the latency but consumes more system resource.
 	TiDBIndexLookupConcurrency = "tidb_index_lookup_concurrency"
 
-	// tidb_index_serial_scan_concurrency is used for controlling the concurrency of index scan operation
-	// when we need to keep the data output order the same as the order of index data.
-	TiDBIndexSerialScanConcurrency = "tidb_index_serial_scan_concurrency"
+	// tidb_skip_ddl_wait skips the wait tiem of two lease after executing CREATE TABLE statement.
+	// When we have multiple TiDB servers in a cluster, the newly created table may not be available on all TiDB server
+	// until two lease time later, set this value to true will reduce the time to create a table, with the risk that
+	// other TiDB servers may fail to use the newly created table in a small time window.
+	TiDBSkipDDLWait = "tidb_skip_ddl_wait"
 
 	// tidb_skip_utf8_check skips the UTF8 validate process, validate UTF8 has performance cost, if we can make sure
 	// the input string values are valid, we can skip the check.
 	TiDBSkipUTF8Check = "tidb_skip_utf8_check"
-
-	// tidb_batch_insert is used to enable/disable auto-split insert data. If set this option on, insert executor will automatically
-	// insert data into multiple batches and use a single txn for each batch. This will be helpful when inserting large data.
-	TiDBBatchInsert = "tidb_batch_insert"
-
-	// tidb_batch_delete is used to enable/disable auto-split delete data. If set this option on, delete executor will automatically
-	// split data into multiple batches and use a single txn for each batch. This will be helpful when deleting large data.
-	TiDBBatchDelete = "tidb_batch_delete"
-
-	// tidb_max_row_count_for_inlj is used when do index nested loop join.
-	// It controls the max row count of outer table when do index nested loop join without hint.
-	// After the row count of the inner table is accurate, this variable will be removed.
-	TiDBMaxRowCountForINLJ = "tidb_max_row_count_for_inlj"
-
-	// tidb_max_chunk_capacity is used to control the max chunk size during query execution.
-	TiDBMaxChunkSize = "tidb_max_chunk_size"
 )
 
 // Default TiDB system variable values.
 const (
-	DefIndexLookupConcurrency     = 4
-	DefIndexSerialScanConcurrency = 1
-	DefIndexJoinBatchSize         = 25000
-	DefIndexLookupSize            = 20000
-	DefDistSQLScanConcurrency     = 10
-	DefBuildStatsConcurrency      = 4
-	DefMaxRowCountForINLJ         = 128
-	DefSkipUTF8Check              = false
-	DefOptAggPushDown             = false
-	DefOptInSubqUnfolding         = false
-	DefBatchInsert                = false
-	DefBatchDelete                = false
-	DefCurretTS                   = 0
-	DefMaxChunkSize               = 1024
+	DefIndexLookupConcurrency = 4
+	DefIndexLookupSize        = 20000
+	DefDistSQLScanConcurrency = 10
+	DefBuildStatsConcurrency  = 4
+	DefSkipDDLWait            = false
+	DefSkipUTF8Check          = false
+	DefOptAggPushDown         = true
+	DefOptInSubqUnfolding     = false
 )

@@ -14,10 +14,9 @@
 package codec
 
 import (
-	"fmt"
-
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/types"
+	"github.com/ngaut/log"
+	"github.com/pingcap/tidb/util/types"
 )
 
 // EncodeDecimal encodes a decimal d into a byte slice which can be sorted lexicographically later.
@@ -31,7 +30,8 @@ func EncodeDecimal(b []byte, d types.Datum) []byte {
 	b = append(b, byte(precision), byte(frac))
 	bin, err := dec.ToBin(precision, frac)
 	if err != nil {
-		panic(fmt.Sprintf("should not happen, precision %d, frac %d %v", precision, frac, err))
+		log.Errorf("should not happen, precision %d, frac %d %v", precision, frac, err)
+		return b
 	}
 	b = append(b, bin...)
 	return b

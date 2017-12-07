@@ -24,13 +24,10 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/tikv"
-	"github.com/pingcap/tidb/terror"
 	"github.com/prometheus/client_golang/prometheus"
-	goctx "golang.org/x/net/context"
 )
 
 var (
@@ -66,25 +63,24 @@ var (
 		}, []string{"type"})
 )
 
-// Init initializes information.
+// Init initializes informations.
 func Init() {
 	driver := tikv.Driver{}
 	var err error
 	store, err = driver.Open(fmt.Sprintf("tikv://%s?cluster=1", *pdAddr))
-	terror.MustNil(err)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	prometheus.MustRegister(txnCounter)
 	prometheus.MustRegister(txnRolledbackCounter)
 	prometheus.MustRegister(txnDurations)
 	http.Handle("/metrics", prometheus.Handler())
 
-	go func() {
-		err1 := http.ListenAndServe(":9191", nil)
-		terror.Log(errors.Trace(err1))
-	}()
+	go http.ListenAndServe(":9191", nil)
 }
 
-// batchRW makes sure conflict free.
+// without conflict
 func batchRW(value []byte) {
 	wg := sync.WaitGroup{}
 	base := *dataCnt / *workerCnt
@@ -101,12 +97,11 @@ func batchRW(value []byte) {
 					log.Fatal(err)
 				}
 				key := fmt.Sprintf("key_%d", k)
-				err = txn.Set([]byte(key), value)
-				terror.Log(errors.Trace(err))
-				err = txn.Commit(goctx.Background())
+				txn.Set([]byte(key), value)
+				err = txn.Commit()
 				if err != nil {
 					txnRolledbackCounter.WithLabelValues("txn").Inc()
-					terror.Call(txn.Rollback)
+					txn.Rollback()
 				}
 
 				txnDurations.WithLabelValues("txn").Observe(time.Since(start).Seconds())
@@ -118,18 +113,22 @@ func batchRW(value []byte) {
 
 func main() {
 	flag.Parse()
-	log.SetLevel(log.ErrorLevel)
+	log.SetLevelByString("error")
 	Init()
 
 	value := make([]byte, *valueSize)
 	t := time.Now()
 	batchRW(value)
 	resp, err := http.Get("http://localhost:9191/metrics")
-	terror.MustNil(err)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	defer terror.Call(resp.Body.Close)
+	defer resp.Body.Close()
 	text, err1 := ioutil.ReadAll(resp.Body)
-	terror.Log(errors.Trace(err1))
+	if err1 != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Println(string(text))
 

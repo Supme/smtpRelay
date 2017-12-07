@@ -100,13 +100,6 @@ func (h *HistoryInfo) AddTableInfo(schemaVer int64, tblInfo *TableInfo) {
 	h.TableInfo = tblInfo
 }
 
-// Clean cleans history information.
-func (h *HistoryInfo) Clean() {
-	h.SchemaVersion = 0
-	h.DBInfo = nil
-	h.TableInfo = nil
-}
-
 // Job is for a DDL operation.
 type Job struct {
 	ID       int64         `json:"id"`
@@ -115,26 +108,23 @@ type Job struct {
 	TableID  int64         `json:"table_id"`
 	State    JobState      `json:"state"`
 	Error    *terror.Error `json:"err"`
-	// ErrorCount will be increased, every time we meet an error when running job.
+	// Every time we meet an error when running job, we will increase it.
 	ErrorCount int64 `json:"err_count"`
-	// RowCount means the number of rows that are processed.
+	// The number of rows that are processed.
 	RowCount int64         `json:"row_count"`
 	Mu       sync.Mutex    `json:"-"`
 	Args     []interface{} `json:"-"`
-	// RawArgs : We must use json raw message to delay parsing special args.
+	// We must use json raw message to delay parsing special args.
 	RawArgs     json.RawMessage `json:"raw_args"`
 	SchemaState SchemaState     `json:"schema_state"`
-	// SnapshotVer means snapshot version for this job.
+	// Snapshot version for this job.
 	SnapshotVer uint64 `json:"snapshot_ver"`
-	// LastUpdateTS now uses unix nano seconds
+	// unix nano seconds
 	// TODO: Use timestamp allocated by TSO.
 	LastUpdateTS int64 `json:"last_update_ts"`
 	// Query string of the ddl job.
 	Query      string       `json:"query"`
 	BinlogInfo *HistoryInfo `json:"binlog"`
-
-	// Version indicates the DDL job version. For old jobs, it will be 0.
-	Version int64 `json:"version"`
 }
 
 // SetRowCount sets the number of rows. Make sure it can pass `make race`.
@@ -154,14 +144,11 @@ func (job *Job) GetRowCount() int64 {
 }
 
 // Encode encodes job with json format.
-// updateRawArgs is used to determine whether to update the raw args.
-func (job *Job) Encode(updateRawArgs bool) ([]byte, error) {
+func (job *Job) Encode() ([]byte, error) {
 	var err error
-	if updateRawArgs {
-		job.RawArgs, err = json.Marshal(job.Args)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+	job.RawArgs, err = json.Marshal(job.Args)
+	if err != nil {
+		return nil, errors.Trace(err)
 	}
 
 	var b []byte
@@ -196,37 +183,17 @@ func (job *Job) String() string {
 // IsFinished returns whether job is finished or not.
 // If the job state is Done or Cancelled, it is finished.
 func (job *Job) IsFinished() bool {
-	return job.State == JobStateDone || job.State == JobStateRollbackDone || job.State == JobStateCancelled
-}
-
-// IsCancelled returns whether the job is cancelled or not.
-func (job *Job) IsCancelled() bool {
-	return job.State == JobStateCancelled || job.State == JobStateRollbackDone
-}
-
-// IsRollingback returns whether the job is rolling back or not.
-func (job *Job) IsRollingback() bool {
-	return job.State == JobStateRollingback
-}
-
-// IsCancelling returns whether the job is cancelling or not.
-func (job *Job) IsCancelling() bool {
-	return job.State == JobStateCancelling
-}
-
-// IsSynced returns whether the DDL modification is synced among all TiDB servers.
-func (job *Job) IsSynced() bool {
-	return job.State == JobStateSynced
+	return job.State == JobDone || job.State == JobRollbackDone || job.State == JobCancelled
 }
 
 // IsDone returns whether job is done.
 func (job *Job) IsDone() bool {
-	return job.State == JobStateDone
+	return job.State == JobDone
 }
 
 // IsRunning returns whether job is still running or not.
 func (job *Job) IsRunning() bool {
-	return job.State == JobStateRunning
+	return job.State == JobRunning
 }
 
 // JobState is for job state.
@@ -234,42 +201,46 @@ type JobState byte
 
 // List job states.
 const (
-	JobStateNone JobState = iota
-	JobStateRunning
-	// When DDL encountered an unrecoverable error at reorganization state,
+	JobNone JobState = iota
+	JobRunning
+	// When DDL encouterred an unrecoverable error at reorganization state,
 	// some keys has been added already, we need to remove them.
-	// JobStateRollingback is the state to do the rolling back job.
-	JobStateRollingback
-	JobStateRollbackDone
-	JobStateDone
-	JobStateCancelled
-	// JobStateSynced is used to mark the information about the completion of this job
-	// has been synchronized to all servers.
-	JobStateSynced
-	// JobStateCancelling is used to mark the DDL job is cancelled by the client, but the DDL work hasn't handle it.
-	JobStateCancelling
+	// JobRollback is the state to do rollback work.
+	JobRollback
+	JobRollbackDone
+	JobDone
+	JobCancelled
 )
 
 // String implements fmt.Stringer interface.
 func (s JobState) String() string {
 	switch s {
-	case JobStateRunning:
+	case JobRunning:
 		return "running"
-	case JobStateRollingback:
-		return "rollingback"
-	case JobStateRollbackDone:
+	case JobRollback:
+		return "rollback"
+	case JobRollbackDone:
 		return "rollback done"
-	case JobStateDone:
+	case JobDone:
 		return "done"
-	case JobStateCancelled:
+	case JobCancelled:
 		return "cancelled"
-	case JobStateCancelling:
-		return "cancelling"
-	case JobStateSynced:
-		return "synced"
 	default:
 		return "none"
 	}
+}
+
+// Owner is for DDL Owner.
+type Owner struct {
+	OwnerID string `json:"owner_id"`
+	// unix nano seconds
+	// TODO: Use timestamp allocated by TSO.
+	LastUpdateTS int64 `json:"last_update_ts"`
+}
+
+// String implements fmt.Stringer interface.
+func (o *Owner) String() string {
+	return fmt.Sprintf("ID:%s, LastUpdateTS:%d", o.OwnerID, o.LastUpdateTS)
 }
 
 // SchemaDiff contains the schema modification at a particular schema version.

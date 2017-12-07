@@ -14,363 +14,165 @@
 package executor
 
 import (
-	"math"
-	"strconv"
-	"time"
+	"fmt"
+	"math/rand"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
+	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
-	"github.com/pingcap/tidb/distsql"
-	"github.com/pingcap/tidb/domain"
-	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/expression"
+	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/sessionctx/variable"
-	"github.com/pingcap/tidb/sessionctx/varsutil"
-	"github.com/pingcap/tidb/statistics"
-	"github.com/pingcap/tidb/tablecodec"
-	"github.com/pingcap/tidb/types"
-	"github.com/pingcap/tidb/util/ranger"
-	"github.com/pingcap/tipb/go-tipb"
-	goctx "golang.org/x/net/context"
+	"github.com/pingcap/tidb/plan/statistics"
+	"github.com/pingcap/tidb/plan/statscache"
+	"github.com/pingcap/tidb/util/sqlexec"
+	"github.com/pingcap/tidb/util/types"
 )
 
 var _ Executor = &AnalyzeExec{}
 
 // AnalyzeExec represents Analyze executor.
 type AnalyzeExec struct {
-	baseExecutor
-	tasks []*analyzeTask
+	schema     *expression.Schema
+	tblInfo    *model.TableInfo
+	ctx        context.Context
+	idxOffsets []int
+	colOffsets []int
+	pkOffset   int
+	Srcs       []Executor
 }
 
 const (
-	maxSampleSize        = 10000
-	maxRegionSampleSize  = 1000
-	maxSketchSize        = 10000
-	maxBucketSize        = 256
-	defaultCMSketchDepth = 8
-	defaultCMSketchWidth = 2048
+	maxSampleCount     = 10000
+	defaultBucketCount = 256
 )
 
-// Open implements the Executor Open interface.
-func (e *AnalyzeExec) Open(goctx.Context) error {
-	return nil
+// Schema implements the Executor Schema interface.
+func (e *AnalyzeExec) Schema() *expression.Schema {
+	return e.schema
 }
 
 // Close implements the Executor Close interface.
 func (e *AnalyzeExec) Close() error {
+	for _, src := range e.Srcs {
+		err := src.Close()
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
 	return nil
 }
 
 // Next implements the Executor Next interface.
-func (e *AnalyzeExec) Next(goCtx goctx.Context) (Row, error) {
-	concurrency, err := getBuildStatsConcurrency(e.ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	taskCh := make(chan *analyzeTask, len(e.tasks))
-	resultCh := make(chan statistics.AnalyzeResult, len(e.tasks))
-	for i := 0; i < concurrency; i++ {
-		go e.analyzeWorker(taskCh, resultCh)
-	}
-	for _, task := range e.tasks {
-		taskCh <- task
-	}
-	close(taskCh)
-	dom := domain.GetDomain(e.ctx)
-	lease := dom.StatsHandle().Lease
-	if lease > 0 {
-		var err1 error
-		for i := 0; i < len(e.tasks); i++ {
-			result := <-resultCh
-			if result.Err != nil {
-				err1 = result.Err
-				log.Error(errors.ErrorStack(err1))
-				continue
-			}
-			dom.StatsHandle().AnalyzeResultCh() <- &result
-		}
-		// We sleep two lease to make sure other tidb node has updated this node.
-		time.Sleep(lease * 2)
-		return nil, errors.Trace(err1)
-	}
-	results := make([]statistics.AnalyzeResult, 0, len(e.tasks))
-	var err1 error
-	for i := 0; i < len(e.tasks); i++ {
-		result := <-resultCh
-		if result.Err != nil {
-			err1 = result.Err
-			log.Error(errors.ErrorStack(err1))
-			continue
-		}
-		results = append(results, result)
-	}
-	if err1 != nil {
-		return nil, errors.Trace(err1)
-	}
-	for _, result := range results {
-		for i, hg := range result.Hist {
-			err = statistics.SaveStatsToStorage(e.ctx, result.TableID, result.Count, result.IsIndex, hg, result.Cms[i])
+func (e *AnalyzeExec) Next() (*Row, error) {
+	for _, src := range e.Srcs {
+		ae := src.(*AnalyzeExec)
+		var count int64 = -1
+		var sampleRows []*ast.Row
+		if ae.colOffsets != nil {
+			rs := &recordSet{executor: ae.Srcs[len(ae.Srcs)-1]}
+			var err error
+			count, sampleRows, err = collectSamples(rs)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 		}
-	}
-	err = dom.StatsHandle().Update(GetInfoSchema(e.ctx))
-	if err != nil {
-		return nil, errors.Trace(err)
+		columnSamples := rowsToColumnSamples(sampleRows)
+		var pkRS ast.RecordSet
+		if ae.pkOffset != -1 {
+			offset := len(ae.Srcs) - 1
+			if ae.colOffsets != nil {
+				offset--
+			}
+			pkRS = &recordSet{executor: ae.Srcs[offset]}
+		}
+		idxRS := make([]ast.RecordSet, 0, len(ae.idxOffsets))
+		for i := range ae.idxOffsets {
+			idxRS = append(idxRS, &recordSet{executor: ae.Srcs[i]})
+		}
+		err := ae.buildStatisticsAndSaveToKV(count, columnSamples, idxRS, pkRS)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 	return nil, nil
 }
 
-func getBuildStatsConcurrency(ctx context.Context) (int, error) {
-	sessionVars := ctx.GetSessionVars()
-	concurrency, err := varsutil.GetSessionSystemVar(sessionVars, variable.TiDBBuildStatsConcurrency)
-	if err != nil {
-		return 0, errors.Trace(err)
+func (e *AnalyzeExec) buildStatisticsAndSaveToKV(count int64, columnSamples [][]types.Datum, idxRS []ast.RecordSet, pkRS ast.RecordSet) error {
+	txn := e.ctx.Txn()
+	statBuilder := &statistics.Builder{
+		Ctx:           e.ctx,
+		TblInfo:       e.tblInfo,
+		StartTS:       int64(txn.StartTS()),
+		Count:         count,
+		NumBuckets:    defaultBucketCount,
+		ColumnSamples: columnSamples,
+		ColOffsets:    e.colOffsets,
+		IdxRecords:    idxRS,
+		IdxOffsets:    e.idxOffsets,
+		PkRecords:     pkRS,
+		PkOffset:      e.pkOffset,
 	}
-	c, err := strconv.ParseInt(concurrency, 10, 64)
-	return int(c), errors.Trace(err)
-}
-
-type taskType int
-
-const (
-	colTask taskType = iota
-	idxTask
-)
-
-type analyzeTask struct {
-	taskType taskType
-	idxExec  *AnalyzeIndexExec
-	colExec  *AnalyzeColumnsExec
-}
-
-func (e *AnalyzeExec) analyzeWorker(taskCh <-chan *analyzeTask, resultCh chan<- statistics.AnalyzeResult) {
-	for task := range taskCh {
-		switch task.taskType {
-		case colTask:
-			resultCh <- analyzeColumnsPushdown(task.colExec)
-		case idxTask:
-			resultCh <- analyzeIndexPushdown(task.idxExec)
-		}
-	}
-}
-
-func analyzeIndexPushdown(idxExec *AnalyzeIndexExec) statistics.AnalyzeResult {
-	hist, cms, err := idxExec.buildStats()
-	if err != nil {
-		return statistics.AnalyzeResult{Err: err}
-	}
-	result := statistics.AnalyzeResult{
-		TableID: idxExec.tblInfo.ID,
-		Hist:    []*statistics.Histogram{hist},
-		Cms:     []*statistics.CMSketch{cms},
-		IsIndex: 1,
-	}
-	if len(hist.Buckets) > 0 {
-		result.Count = hist.Buckets[len(hist.Buckets)-1].Count
-	}
-	return result
-}
-
-// AnalyzeIndexExec represents analyze index push down executor.
-type AnalyzeIndexExec struct {
-	ctx         context.Context
-	tblInfo     *model.TableInfo
-	idxInfo     *model.IndexInfo
-	concurrency int
-	priority    int
-	analyzePB   *tipb.AnalyzeReq
-	result      distsql.SelectResult
-}
-
-func (e *AnalyzeIndexExec) open() error {
-	idxRange := &ranger.IndexRange{LowVal: []types.Datum{types.MinNotNullDatum()}, HighVal: []types.Datum{types.MaxValueDatum()}}
-	var builder requestBuilder
-	kvReq, err := builder.SetIndexRanges(e.tblInfo.ID, e.idxInfo.ID, []*ranger.IndexRange{idxRange}).
-		SetAnalyzeRequest(e.analyzePB).
-		SetKeepOrder(true).
-		SetPriority(e.priority).
-		Build()
-	kvReq.Concurrency = e.concurrency
-	kvReq.IsolationLevel = kv.RC
-	goCtx := goctx.TODO()
-	e.result, err = distsql.Analyze(goCtx, e.ctx.GetClient(), kvReq)
+	t, err := statBuilder.NewTable()
 	if err != nil {
 		return errors.Trace(err)
 	}
-	e.result.Fetch(goCtx)
+	version := e.ctx.Txn().StartTS()
+	statscache.SetStatisticsTableCache(e.tblInfo.ID, t, version)
+	tpb, err := t.ToPB()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	m := meta.NewMeta(txn)
+	err = m.SetTableStats(e.tblInfo.ID, tpb)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	insertSQL := fmt.Sprintf("insert into mysql.stats_meta (version, table_id) values (%d, %d) on duplicate key update version = %d", version, e.tblInfo.ID, version)
+	_, _, err = e.ctx.(sqlexec.RestrictedSQLExecutor).ExecRestrictedSQL(e.ctx, insertSQL)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
-func (e *AnalyzeIndexExec) buildStats() (hist *statistics.Histogram, cms *statistics.CMSketch, err error) {
-	if err = e.open(); err != nil {
-		return nil, nil, errors.Trace(err)
-	}
-	defer func() {
-		if err1 := e.result.Close(); err1 != nil {
-			hist = nil
-			cms = nil
-			err = errors.Trace(err1)
-		}
-	}()
-	hist = &statistics.Histogram{}
-	cms = statistics.NewCMSketch(defaultCMSketchDepth, defaultCMSketchWidth)
+// collectSamples collects sample from the result set, using Reservoir Sampling algorithm.
+// See https://en.wikipedia.org/wiki/Reservoir_sampling
+func collectSamples(e ast.RecordSet) (count int64, samples []*ast.Row, err error) {
 	for {
-		data, err := e.result.NextRaw()
+		row, err := e.Next()
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return count, samples, errors.Trace(err)
 		}
-		if data == nil {
+		if row == nil {
 			break
 		}
-		resp := &tipb.AnalyzeIndexResp{}
-		err = resp.Unmarshal(data)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-		hist, err = statistics.MergeHistograms(e.ctx.GetSessionVars().StmtCtx, hist, statistics.HistogramFromProto(resp.Hist), maxBucketSize)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-		if resp.Cms != nil {
-			err := cms.MergeCMSketch(statistics.CMSketchFromProto(resp.Cms))
-			if err != nil {
-				return nil, nil, errors.Trace(err)
+		if len(samples) < maxSampleCount {
+			samples = append(samples, row)
+		} else {
+			shouldAdd := rand.Int63n(count) < maxSampleCount
+			if shouldAdd {
+				idx := rand.Intn(maxSampleCount)
+				samples[idx] = row
 			}
 		}
+		count++
 	}
-	hist.ID = e.idxInfo.ID
-	return hist, cms, nil
+	return count, samples, nil
 }
 
-func analyzeColumnsPushdown(colExec *AnalyzeColumnsExec) statistics.AnalyzeResult {
-	hists, cms, err := colExec.buildStats()
-	if err != nil {
-		return statistics.AnalyzeResult{Err: err}
+func rowsToColumnSamples(rows []*ast.Row) [][]types.Datum {
+	if len(rows) == 0 {
+		return nil
 	}
-	result := statistics.AnalyzeResult{
-		TableID: colExec.tblInfo.ID,
-		Hist:    hists,
-		Cms:     cms,
+	columnSamples := make([][]types.Datum, len(rows[0].Data))
+	for i := range columnSamples {
+		columnSamples[i] = make([]types.Datum, len(rows))
 	}
-	hist := hists[0]
-	result.Count = hist.NullCount
-	if len(hist.Buckets) > 0 {
-		result.Count += hist.Buckets[len(hist.Buckets)-1].Count
-	}
-	return result
-}
-
-// AnalyzeColumnsExec represents Analyze columns push down executor.
-type AnalyzeColumnsExec struct {
-	ctx         context.Context
-	tblInfo     *model.TableInfo
-	colsInfo    []*model.ColumnInfo
-	pkInfo      *model.ColumnInfo
-	concurrency int
-	priority    int
-	keepOrder   bool
-	analyzePB   *tipb.AnalyzeReq
-	result      distsql.SelectResult
-}
-
-func (e *AnalyzeColumnsExec) open() error {
-	ranges := []ranger.IntColumnRange{{LowVal: math.MinInt64, HighVal: math.MaxInt64}}
-	var builder requestBuilder
-	kvReq, err := builder.SetTableRanges(e.tblInfo.ID, ranges).
-		SetAnalyzeRequest(e.analyzePB).
-		SetKeepOrder(e.keepOrder).
-		SetPriority(e.priority).
-		Build()
-	kvReq.IsolationLevel = kv.RC
-	kvReq.Concurrency = e.concurrency
-	if err != nil {
-		return errors.Trace(err)
-	}
-	goCtx := goctx.TODO()
-	e.result, err = distsql.Analyze(goCtx, e.ctx.GetClient(), kvReq)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	e.result.Fetch(goCtx)
-	return nil
-}
-
-func (e *AnalyzeColumnsExec) buildStats() (hists []*statistics.Histogram, cms []*statistics.CMSketch, err error) {
-	if err = e.open(); err != nil {
-		return nil, nil, errors.Trace(err)
-	}
-	defer func() {
-		if err1 := e.result.Close(); err1 != nil {
-			hists = nil
-			cms = nil
-			err = errors.Trace(err1)
-		}
-	}()
-	pkHist := &statistics.Histogram{}
-	collectors := make([]*statistics.SampleCollector, len(e.colsInfo))
-	for i := range collectors {
-		collectors[i] = &statistics.SampleCollector{
-			IsMerger:      true,
-			FMSketch:      statistics.NewFMSketch(maxSketchSize),
-			MaxSampleSize: maxSampleSize,
-			CMSketch:      statistics.NewCMSketch(defaultCMSketchDepth, defaultCMSketchWidth),
+	for j, row := range rows {
+		for i, val := range row.Data {
+			columnSamples[i][j] = val
 		}
 	}
-	for {
-		data, err1 := e.result.NextRaw()
-		if err1 != nil {
-			return nil, nil, errors.Trace(err1)
-		}
-		if data == nil {
-			break
-		}
-		resp := &tipb.AnalyzeColumnsResp{}
-		err = resp.Unmarshal(data)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-		if e.pkInfo != nil {
-			pkHist, err = statistics.MergeHistograms(e.ctx.GetSessionVars().StmtCtx, pkHist, statistics.HistogramFromProto(resp.PkHist), maxBucketSize)
-			if err != nil {
-				return nil, nil, errors.Trace(err)
-			}
-		}
-		for i, rc := range resp.Collectors {
-			collectors[i].MergeSampleCollector(statistics.SampleCollectorFromProto(rc))
-		}
-	}
-	timeZone := e.ctx.GetSessionVars().GetTimeZone()
-	if e.pkInfo != nil {
-		pkHist.ID = e.pkInfo.ID
-		for i, bkt := range pkHist.Buckets {
-			pkHist.Buckets[i].LowerBound, err = tablecodec.DecodeColumnValue(bkt.LowerBound.GetBytes(), &e.pkInfo.FieldType, timeZone)
-			if err != nil {
-				return nil, nil, errors.Trace(err)
-			}
-			pkHist.Buckets[i].UpperBound, err = tablecodec.DecodeColumnValue(bkt.UpperBound.GetBytes(), &e.pkInfo.FieldType, timeZone)
-			if err != nil {
-				return nil, nil, errors.Trace(err)
-			}
-		}
-		hists = append(hists, pkHist)
-		cms = append(cms, nil)
-	}
-	for i, col := range e.colsInfo {
-		for j, s := range collectors[i].Samples {
-			collectors[i].Samples[j], err = tablecodec.DecodeColumnValue(s.GetBytes(), &col.FieldType, timeZone)
-			if err != nil {
-				return nil, nil, errors.Trace(err)
-			}
-		}
-		hg, err := statistics.BuildColumn(e.ctx, maxBucketSize, col.ID, collectors[i])
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-		hists = append(hists, hg)
-		cms = append(cms, collectors[i].CMSketch)
-	}
-	return hists, cms, nil
+	return columnSamples
 }

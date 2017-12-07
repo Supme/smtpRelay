@@ -14,13 +14,11 @@
 package expression
 
 import (
-	log "github.com/Sirupsen/logrus"
-	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/types"
 )
 
 // MaxPropagateColsCnt means the max number of columns that can participate propagation.
@@ -101,9 +99,9 @@ func (s *propagateConstantSolver) propagateInEQ() {
 				funName := cond.(*ScalarFunction).FuncName.L
 				var newExpr Expression
 				if _, ok := cond.(*ScalarFunction).GetArgs()[0].(*Column); ok {
-					newExpr = NewFunctionInternal(s.ctx, funName, cond.GetType(), s.columns[j], con)
+					newExpr, _ = NewFunction(s.ctx, funName, cond.GetType(), s.columns[j], con)
 				} else {
-					newExpr = NewFunctionInternal(s.ctx, funName, cond.GetType(), con, s.columns[j])
+					newExpr, _ = NewFunction(s.ctx, funName, cond.GetType(), con, s.columns[j])
 				}
 				s.conditions = append(s.conditions, newExpr)
 			}
@@ -111,7 +109,7 @@ func (s *propagateConstantSolver) propagateInEQ() {
 	}
 }
 
-// propagateEQ propagates equal expression multiple times. An example runs as following:
+// propagatesEQ propagates equal expression multiple times. An example runs as following:
 // a = d & b * 2 = c & c = d + 2 & b = 1 & a = 4, we pick eq cond b = 1 and a = 4
 // d = 4 & 2 = c & c = d + 2 & b = 1 & a = 4, we propagate b = 1 and a = 4 and pick eq cond c = 2 and d = 4
 // d = 4 & 2 = c & false & b = 1 & a = 4, we propagate c = 2 and d = 4, and do constant folding: c = d + 2 will be folded as false.
@@ -120,7 +118,7 @@ func (s *propagateConstantSolver) propagateEQ() {
 	visited := make([]bool, len(s.conditions))
 	for i := 0; i < MaxPropagateColsCnt; i++ {
 		mapper := s.pickNewEQConds(visited)
-		if len(mapper) == 0 {
+		if mapper == nil || len(mapper) == 0 {
 			return
 		}
 		cols := make([]*Column, 0, len(mapper))
@@ -176,8 +174,7 @@ func (s *propagateConstantSolver) pickNewEQConds(visited []bool) (retMapper map[
 		ok := false
 		if col == nil {
 			if con, ok = cond.(*Constant); ok {
-				value, err := EvalBool([]Expression{con}, nil, s.ctx)
-				terror.Log(errors.Trace(err))
+				value, _ := EvalBool(con, nil, s.ctx)
 				if !value {
 					s.setConds2ConstFalse()
 					return nil
@@ -214,7 +211,7 @@ func (s *propagateConstantSolver) tryToUpdateEQList(col *Column, con *Constant) 
 }
 
 func (s *propagateConstantSolver) solve(conditions []Expression) []Expression {
-	cols := make([]*Column, 0, len(conditions))
+	var cols []*Column
 	for _, cond := range conditions {
 		s.conditions = append(s.conditions, SplitCNFItems(cond)...)
 		cols = append(cols, ExtractColumns(cond)...)
@@ -229,7 +226,7 @@ func (s *propagateConstantSolver) solve(conditions []Expression) []Expression {
 	s.propagateEQ()
 	s.propagateInEQ()
 	for i, cond := range s.conditions {
-		if dnf, ok := cond.(*ScalarFunction); ok && dnf.FuncName.L == ast.LogicOr {
+		if dnf, ok := cond.(*ScalarFunction); ok && dnf.FuncName.L == ast.OrOr {
 			dnfItems := SplitDNFItems(cond)
 			for j, item := range dnfItems {
 				dnfItems[j] = ComposeCNFCondition(s.ctx, PropagateConstant(s.ctx, []Expression{item})...)

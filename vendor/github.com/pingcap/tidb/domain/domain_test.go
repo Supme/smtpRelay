@@ -17,12 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juju/errors"
-	"github.com/ngaut/pools"
 	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/store/tikv"
+	"github.com/pingcap/tidb/store/localstore"
+	"github.com/pingcap/tidb/store/localstore/goleveldb"
 	"github.com/pingcap/tidb/util/mock"
 	"github.com/pingcap/tidb/util/testleak"
 )
@@ -37,25 +36,13 @@ var _ = Suite(&testSuite{})
 type testSuite struct {
 }
 
-func mockFactory() (pools.Resource, error) {
-	return nil, errors.New("mock factory should not be called")
-}
-
-func sysMockFactory(dom *Domain) (pools.Resource, error) {
-	return nil, nil
-}
-
 func (*testSuite) TestT(c *C) {
+	driver := localstore.Driver{Driver: goleveldb.MemoryDriver{}}
+	store, err := driver.Open("memory")
+	c.Assert(err, IsNil)
 	defer testleak.AfterTest(c)()
-	store, err := tikv.NewMockTikvStore()
+	dom, err := NewDomain(store, 80*time.Millisecond)
 	c.Assert(err, IsNil)
-	ddlLease := 80 * time.Millisecond
-	dom := NewDomain(store, ddlLease, 0, mockFactory)
-	err = dom.Init(ddlLease, sysMockFactory)
-	c.Assert(err, IsNil)
-	defer func() {
-		dom.Close()
-	}()
 	store = dom.Store()
 	ctx := mock.NewContext()
 	ctx.Store = store
@@ -75,30 +62,34 @@ func (*testSuite) TestT(c *C) {
 	lease := 100 * time.Millisecond
 
 	// for schemaValidator
-	schemaVer := dom.SchemaValidator.(*schemaValidator).latestSchemaVer
+	schemaVer := dom.SchemaValidator.Latest()
 	ver, err := store.CurrentVersion()
 	c.Assert(err, IsNil)
 	ts := ver.Ver
 
-	succ := dom.SchemaValidator.Check(ts, schemaVer, nil)
-	c.Assert(succ, Equals, ResultSucc)
+	succ := dom.SchemaValidator.Check(ts, schemaVer)
+	c.Assert(succ, IsTrue)
 	dom.MockReloadFailed.SetValue(true)
 	err = dom.Reload()
 	c.Assert(err, NotNil)
-	succ = dom.SchemaValidator.Check(ts, schemaVer, nil)
-	c.Assert(succ, Equals, ResultSucc)
+	succ = dom.SchemaValidator.Check(ts, schemaVer)
+	c.Assert(succ, IsTrue)
 	time.Sleep(lease)
 
 	ver, err = store.CurrentVersion()
 	c.Assert(err, IsNil)
 	ts = ver.Ver
-	succ = dom.SchemaValidator.Check(ts, schemaVer, nil)
-	c.Assert(succ, Equals, ResultUnknown)
+	succ = dom.SchemaValidator.Check(ts, schemaVer)
+	c.Assert(succ, IsFalse)
 	dom.MockReloadFailed.SetValue(false)
 	err = dom.Reload()
 	c.Assert(err, IsNil)
-	succ = dom.SchemaValidator.Check(ts, schemaVer, nil)
-	c.Assert(succ, Equals, ResultSucc)
+	succ = dom.SchemaValidator.Check(ts, schemaVer)
+	c.Assert(succ, IsTrue)
+	ver, err = store.CurrentVersion()
+	c.Assert(err, IsNil)
+	succ = dom.SchemaValidator.Check(ver.Ver, schemaVer)
+	c.Assert(succ, IsTrue)
 
 	err = store.Close()
 	c.Assert(err, IsNil)

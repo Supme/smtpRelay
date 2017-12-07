@@ -15,8 +15,6 @@ package kv
 
 import (
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/store/tikv/oracle"
-	goctx "golang.org/x/net/context"
 )
 
 // mockTxn is a txn that returns a retryAble error when called Commit.
@@ -25,8 +23,8 @@ type mockTxn struct {
 	valid bool
 }
 
-// Commit always returns a retryable error.
-func (t *mockTxn) Commit(ctx goctx.Context) error {
+// Always returns a retryable error.
+func (t *mockTxn) Commit() error {
 	return ErrRetryable
 }
 
@@ -95,18 +93,6 @@ func (t *mockTxn) Size() int {
 	return 0
 }
 
-func (t *mockTxn) GetMemBuffer() MemBuffer {
-	return nil
-}
-
-// NewMockTxn new a mockTxn.
-func NewMockTxn() Transaction {
-	return &mockTxn{
-		opts:  make(map[Option]interface{}),
-		valid: true,
-	}
-}
-
 // mockStorage is used to start a must commit-failed txn.
 type mockStorage struct {
 }
@@ -145,14 +131,6 @@ func (s *mockStorage) CurrentVersion() (Version, error) {
 
 func (s *mockStorage) GetClient() Client {
 	return nil
-}
-
-func (s *mockStorage) GetOracle() oracle.Oracle {
-	return nil
-}
-
-func (s *mockStorage) SupportDeleteRange() (supported bool) {
-	return false
 }
 
 // MockTxn is used for test cases that need more interfaces than Transaction.
