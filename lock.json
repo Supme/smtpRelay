@@ -1,10 +1,10 @@
 {
-    "memo": "26c5ac0668ae55ca385dbd9de459c5208d5a8afc44b624b3d7b15b7e50405d1a",
+    "memo": "54135b14f0c52b2fbeccae29136996b7a167d162306da94309f191a4cda5a264",
     "projects": [
         {
             "name": "github.com/BurntSushi/toml",
             "branch": "master",
-            "revision": "d94612f9fc140360834f9742158c70b5c5b5535b",
+            "revision": "a368813c5e648fee92e5f6c30e3944ff9d5e8895",
             "packages": [
                 "."
             ]
@@ -12,7 +12,7 @@
         {
             "name": "github.com/denisenkom/go-mssqldb",
             "branch": "master",
-            "revision": "2c6544812a77396578c2c2325ce320c36f76198a",
+            "revision": "8a15d1bb0c8eaa4b870c016b312de5b50b493b4e",
             "packages": [
                 "."
             ]
@@ -20,7 +20,7 @@
         {
             "name": "github.com/go-sql-driver/mysql",
             "branch": "master",
-            "revision": "14f4292c08c0daf077adddd5824cffc82a797ff4",
+            "revision": "9181e3a86a19bacd63e68d43ae8b7b36320d8092",
             "packages": [
                 "."
             ]
@@ -28,15 +28,15 @@
         {
             "name": "github.com/go-xorm/builder",
             "branch": "master",
-            "revision": "c6e604e9c7b7461715091e14ad0c242ec44c26e4",
+            "revision": "a4a881a4e552fcb5473f39e8b9f7d9f3457a7fb0",
             "packages": [
                 "."
             ]
         },
         {
             "name": "github.com/go-xorm/core",
-            "branch": "master",
-            "revision": "e8409d73255791843585964791443dbad877058c",
+            "version": "v0.5.7",
+            "revision": "da1adaf7a28ca792961721a34e6e04945200c890",
             "packages": [
                 "."
             ]
@@ -44,7 +44,7 @@
         {
             "name": "github.com/go-xorm/xorm",
             "branch": "master",
-            "revision": "a55bded5185d3966a1906b0a48ef72281629809c",
+            "revision": "e0c5a951ff4ab6fce587fcc57c62d549c57e15b3",
             "packages": [
                 "."
             ]
@@ -52,7 +52,7 @@
         {
             "name": "github.com/lib/pq",
             "branch": "master",
-            "revision": "2704adc878c21e1329f46f6e56a1c387d788ff94",
+            "revision": "83612a56d3dd153a94a629cd64925371c9adad78",
             "packages": [
                 "."
             ]
@@ -63,14 +63,6 @@
             "revision": "d5ffb5c0cca8778699a929b236766f4a7af674e8",
             "packages": [
                 "."
-            ]
-        },
-        {
-            "name": "github.com/pingcap/tidb",
-            "branch": "master",
-            "revision": "1513adc986aff784959951ccbd5035b3f413006b",
-            "packages": [
-                "_vendor/src/github.com/juju/errors"
             ]
         },
         {
@@ -92,7 +84,7 @@
         {
             "name": "github.com/toorop/go-dkim",
             "branch": "master",
-            "revision": "43c1bb05e85404d07a5020ad38c6b67b3a039b86",
+            "revision": "83672023c79e6b352bf9d4908e6c060c7a24323c",
             "packages": [
                 "."
             ]
@@ -108,7 +100,7 @@
         {
             "name": "golang.org/x/net",
             "branch": "master",
-            "revision": "a8b9294777976932365dabb6640cf1468d95c70f",
+            "revision": "dc871a5d77e227f5bbf6545176ef3eeebf87e76e",
             "packages": [
                 "context",
                 "idna",
@@ -118,11 +110,19 @@
         {
             "name": "golang.org/x/text",
             "branch": "master",
-            "revision": "88f656faf3f37f690df1a32515b479415e1a6769",
+            "revision": "be25de41fadfae372d6470bda81ca6beb55ef551",
             "packages": [
                 "secure/bidirule",
                 "unicode/bidi",
                 "unicode/norm"
+            ]
+        },
+        {
+            "name": "google.golang.org/appengine",
+            "version": "v1.0.0",
+            "revision": "150dc57a1b433e64154302bdc40b6bb8aefa313a",
+            "packages": [
+                "cloudsql"
             ]
         }
     ]

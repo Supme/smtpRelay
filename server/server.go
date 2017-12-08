@@ -2,7 +2,7 @@ package server
 
 import (
 	"bytes"
-	"github.com/pingcap/tidb/_vendor/src/github.com/juju/errors"
+	"errors"
 	"github.com/sfreiberg/go-smtpd/smtpd"
 	"github.com/supme/smtpRelay/model"
 	"log"
