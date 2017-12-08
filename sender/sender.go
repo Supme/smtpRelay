@@ -45,17 +45,13 @@ func resendQueue() {
 	}
 }
 
-func stringToByte(s string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(s)
-}
-
 func send(emails []model.Queue) {
 	var wg sync.WaitGroup
 	for i := range emails {
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, email model.Queue) {
 			defer wg.Done()
-			dataByte, err := stringToByte(email.Data)
+			dataByte, err := base64.StdEncoding.DecodeString(email.Data)
 			if err != nil {
 				email.LaterStatus = "550 " + err.Error()
 				return
