@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"errors"
-	"github.com/sfreiberg/go-smtpd/smtpd"
+	"github.com/XS4ALL/go-smtpd/smtpd"
 	"github.com/supme/smtpRelay/model"
 	"log"
 	"regexp"
@@ -61,7 +61,7 @@ func (e *env) Close() error {
 
 func onNewMail(c smtpd.Connection, from smtpd.MailAddress) (smtpd.Envelope, error) {
 	if !model.CheckAllow(c.Addr().String(), from.Hostname()) {
-		return new(env), errors.New("Access denied")
+		return new(env), errors.New("550 Access denied")
 	}
 	env := new(env)
 	env.from = from
@@ -75,9 +75,11 @@ func Run() {
 		Addr:      model.Config.SMTPListenAddr,
 		OnNewMail: onNewMail,
 	}
+	s.OnProtoError = func(err error) {
+		log.Print(err.Error())
+	}
 	log.Printf("Starting SMTP server on %s", model.Config.SMTPListenAddr)
-	err := s.ListenAndServe()
-	if err != nil {
+	if err := s.ListenAndServe(); err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
 	}
 }

@@ -6,10 +6,19 @@ import (
 	"github.com/supme/smtpRelay/model"
 	"sync"
 	"time"
+	"os"
+	"log"
 )
 
 // Run start sending queue emails
 func Run() {
+	if model.Config.Hostname == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			log.Print(err)
+		}
+		model.Config.Hostname = h
+	}
 	go sendQueue()
 	go resendQueue()
 }

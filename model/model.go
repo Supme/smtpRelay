@@ -7,7 +7,7 @@ import (
 	"github.com/go-xorm/xorm"
 	_ "github.com/lib/pq"           // Postgres driver
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
-	"github.com/sfreiberg/go-smtpd/smtpd"
+	"github.com/XS4ALL/go-smtpd/smtpd"
 	"log"
 	"strings"
 	"time"

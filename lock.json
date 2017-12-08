@@ -1,5 +1,5 @@
 {
-    "memo": "54135b14f0c52b2fbeccae29136996b7a167d162306da94309f191a4cda5a264",
+    "memo": "b63a447d6eb75b598ac9b34dae885ac72d97a1abfe1b90ce602fd7af8020baaf",
     "projects": [
         {
             "name": "github.com/BurntSushi/toml",
@@ -7,6 +7,14 @@
             "revision": "a368813c5e648fee92e5f6c30e3944ff9d5e8895",
             "packages": [
                 "."
+            ]
+        },
+        {
+            "name": "github.com/XS4ALL/go-smtpd",
+            "branch": "master",
+            "revision": "72f52be20b5c845de874cc0b23bca6f8263a3849",
+            "packages": [
+                "smtpd"
             ]
         },
         {
@@ -63,14 +71,6 @@
             "revision": "d5ffb5c0cca8778699a929b236766f4a7af674e8",
             "packages": [
                 "."
-            ]
-        },
-        {
-            "name": "github.com/sfreiberg/go-smtpd",
-            "branch": "master",
-            "revision": "b208d773e1ddf0bdbb91ba3327be499404e2911b",
-            "packages": [
-                "smtpd"
             ]
         },
         {
