@@ -6,13 +6,22 @@ import (
 	"github.com/supme/smtpRelay/model"
 	"github.com/supme/smtpRelay/sender"
 	"github.com/supme/smtpRelay/server"
+	"fmt"
+	"os"
 )
+
+const version = "v0.2.3"
 
 var configFile string
 
 func init() {
+	ver := flag.Bool("v", false, "print current version")
 	flag.StringVar(&configFile, "c", "./config.ini", "Config file")
 	flag.Parse()
+	if *ver {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 }
 
 func main() {
@@ -30,7 +39,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer model.QueueDb.Close()
+	defer model.StatusDb.Close()
 
 	sender.Run()
 

@@ -66,13 +66,12 @@ type status struct {
 
 // OpenQueueDb open queue database
 func OpenQueueDb() (err error) {
-	QueueDb, err = xorm.NewEngine(Config.StatusDbDialect, Config.StatusDbConnect)
+	QueueDb, err = xorm.NewEngine(Config.QueueDbDialect, Config.QueueDbConnect)
 	if err != nil {
 		return
 	}
 	QueueDb.ShowSQL(Config.Debug)
-	err = QueueDb.Sync2(new(Queue))
-	return err
+	return QueueDb.Sync2(new(Queue))
 }
 
 // OpenStatusDb open status database
@@ -82,8 +81,8 @@ func OpenStatusDb() (err error) {
 		return
 	}
 	StatusDb.ShowSQL(Config.Debug)
-	err = StatusDb.Sync2(new(status))
-	return err
+
+	return StatusDb.Sync2(new(status))
 }
 
 // AddToQueue add email to queue
