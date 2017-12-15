@@ -2,12 +2,12 @@ package model
 
 import (
 	"encoding/base64"
+	"github.com/XS4ALL/go-smtpd/smtpd"
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
 	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/go-xorm/xorm"
 	_ "github.com/lib/pq"           // Postgres driver
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
-	"github.com/XS4ALL/go-smtpd/smtpd"
 	"log"
 	"strings"
 	"time"
@@ -94,15 +94,19 @@ func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []s
 		return err
 	}
 	for _, rcpt := range rcpts {
-		if _, err := session.InsertOne(&Queue{
-			MessageType:  messageType,
-			MessageID:    messageID,
-			From:         from.Email(),
-			FromHostname: from.Hostname(),
-			Rcpt:         rcpt.Email(),
-			RcptHostname: rcpt.Hostname(),
-			Data:         base64.StdEncoding.EncodeToString(data),
-		}); err != nil {
+		if _, err := session.Query(`
+INSERT INTO "queue"
+  ("created_at","updated_at","message_type","message_id","from","from_hostname","rcpt","rcpt_hostname","data","repeat","later_status")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+			time.Now(),
+			time.Now(),
+			messageType,
+			messageID,
+			from.Email(),
+			from.Hostname(),
+			rcpt.Email(),
+			rcpt.Hostname(),
+			base64.StdEncoding.EncodeToString(data)); err != nil {
 			log.Println(err)
 			session.Rollback()
 			return err
@@ -155,15 +159,17 @@ func SetStatus(email *Queue) {
 }
 
 func setStatus(email *Queue) {
-	if _, err := StatusDb.InsertOne(&status{
-		QueuedAt:    email.CreatedAt,
-		SendingAt:   time.Now(),
-		From:        email.From,
-		Rcpt:        email.Rcpt,
-		MessageType: email.MessageType,
-		MessageID:   email.MessageID,
-		Status:      email.LaterStatus,
-	}); err != nil {
+	if _, err := StatusDb.Query(`
+INSERT INTO "status"
+  ("queued_at","sending_at","from","rcpt","message_type","message_id","status")
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		email.CreatedAt,
+		time.Now(),
+		email.From,
+		email.Rcpt,
+		email.MessageType,
+		email.MessageID,
+		email.LaterStatus); err != nil {
 		log.Print(err)
 	}
 	if _, err := QueueDb.Delete(&Queue{ID: email.ID}); err != nil {
