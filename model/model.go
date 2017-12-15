@@ -98,8 +98,8 @@ func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []s
 INSERT INTO "queue"
   ("created_at","updated_at","message_type","message_id","from","from_hostname","rcpt","rcpt_hostname","data","repeat","later_status")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
-			time.Now(),
-			time.Now(),
+			time.Now().Local(),
+			time.Now().Local(),
 			messageType,
 			messageID,
 			from.Email(),
@@ -163,8 +163,8 @@ func setStatus(email *Queue) {
 INSERT INTO "status"
   ("queued_at","sending_at","from","rcpt","message_type","message_id","status")
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		email.CreatedAt,
-		time.Now(),
+		email.CreatedAt.Local(),
+		time.Now().Local(),
 		email.From,
 		email.Rcpt,
 		email.MessageType,
