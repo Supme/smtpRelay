@@ -98,8 +98,8 @@ func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []s
 INSERT INTO "queue"
   ("created_at","updated_at","message_type","message_id","from","from_hostname","rcpt","rcpt_hostname","data","repeat","later_status")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
-			time.Now().Local(),
-			time.Now().Local(),
+			time.Now(),
+			time.Now(),
 			messageType,
 			messageID,
 			from.Email(),
@@ -119,7 +119,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
 func GetRepeatQueue(limit uint) []Queue {
 	var emails []Queue
 	if err := QueueDb.Where("updated_at < ? AND repeat > 0",
-		time.Now().Local().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
+		time.Now().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
 		Limit(int(limit)).
 		Find(&emails); err != nil {
 		log.Print(err)
@@ -163,8 +163,8 @@ func setStatus(email *Queue) {
 INSERT INTO "status"
   ("queued_at","sending_at","from","rcpt","message_type","message_id","status")
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		email.CreatedAt.Local(),
-		time.Now().Local(),
+		email.CreatedAt,
+		time.Now(),
 		email.From,
 		email.Rcpt,
 		email.MessageType,
