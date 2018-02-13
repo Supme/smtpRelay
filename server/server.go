@@ -79,7 +79,7 @@ func Run() {
 	s.OnProtoError = func(err error) {
 		log.Print(err.Error())
 	}
-	fmt.Printf("SMTP server running on %s", model.Config.SMTPListenAddr)
+	fmt.Printf("SMTP server running on %s\n", model.Config.SMTPListenAddr)
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
 	}
