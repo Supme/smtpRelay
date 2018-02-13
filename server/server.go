@@ -3,11 +3,11 @@ package server
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/XS4ALL/go-smtpd/smtpd"
 	"github.com/supme/smtpRelay/model"
 	"log"
 	"regexp"
-	"fmt"
 )
 
 var (

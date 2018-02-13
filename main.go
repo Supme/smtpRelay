@@ -2,11 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/BurntSushi/toml"
 	"github.com/supme/smtpRelay/model"
 	"github.com/supme/smtpRelay/sender"
 	"github.com/supme/smtpRelay/server"
-	"fmt"
 	"os"
 )
 

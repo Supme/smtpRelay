@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/base64"
+	"fmt"
 	"github.com/XS4ALL/go-smtpd/smtpd"
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
 	_ "github.com/go-sql-driver/mysql"   // MySQL driver
@@ -11,7 +12,6 @@ import (
 	"log"
 	"strings"
 	"time"
-	"fmt"
 )
 
 // Config application config
@@ -144,7 +144,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
 func GetRepeatQueue(limit uint) []Queue {
 	var emails []Queue
 	if err := QueueDb.Where(whereInterval).
-		And( "repeat > 0").
+		And("repeat > 0").
 		Limit(int(limit)).
 		Find(&emails); err != nil {
 		log.Print(err)
@@ -171,11 +171,11 @@ func SetStatus(email *Queue) {
 	} else {
 		if strings.HasPrefix(email.LaterStatus, "4") {
 			if _, err := QueueDb.Exec(`UPDATE "queue" SET "repeat" = ?, "later_status" = ?, "updated_at" = ? WHERE "id"=?`,
-					email.Repeat,
-					email.LaterStatus,
-					time.Now(),
-					email.ID,
-				); err != nil {
+				email.Repeat,
+				email.LaterStatus,
+				time.Now(),
+				email.ID,
+			); err != nil {
 				log.Print(err)
 			}
 		} else {

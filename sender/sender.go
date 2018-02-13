@@ -4,10 +4,10 @@ import (
 	"encoding/base64"
 	"github.com/supme/directEmail"
 	"github.com/supme/smtpRelay/model"
+	"log"
+	"os"
 	"sync"
 	"time"
-	"os"
-	"log"
 )
 
 // Run start sending queue emails
@@ -19,7 +19,6 @@ func Run() {
 		}
 		model.Config.Hostname = h
 	}
-
 
 	go sendQueue()
 	go resendQueue()
