@@ -20,7 +20,7 @@
         {
             "name": "github.com/denisenkom/go-mssqldb",
             "branch": "master",
-            "revision": "8a15d1bb0c8eaa4b870c016b312de5b50b493b4e",
+            "revision": "ee492709d4324cdcb051d2ac266b77ddc380f5c5",
             "packages": [
                 "."
             ]
@@ -28,7 +28,7 @@
         {
             "name": "github.com/go-sql-driver/mysql",
             "branch": "master",
-            "revision": "9181e3a86a19bacd63e68d43ae8b7b36320d8092",
+            "revision": "bc14601d1bd56421dd60f561e6052c9ed77f9daf",
             "packages": [
                 "."
             ]
@@ -36,7 +36,7 @@
         {
             "name": "github.com/go-xorm/builder",
             "branch": "master",
-            "revision": "a4a881a4e552fcb5473f39e8b9f7d9f3457a7fb0",
+            "revision": "488224409dd8aa2ce7a5baf8d10d55764a913738",
             "packages": [
                 "."
             ]
@@ -52,7 +52,7 @@
         {
             "name": "github.com/go-xorm/xorm",
             "branch": "master",
-            "revision": "e0c5a951ff4ab6fce587fcc57c62d549c57e15b3",
+            "revision": "2e295feace1835837c90e225d1bbf56e8977ec4d",
             "packages": [
                 "."
             ]
@@ -60,7 +60,7 @@
         {
             "name": "github.com/lib/pq",
             "branch": "master",
-            "revision": "83612a56d3dd153a94a629cd64925371c9adad78",
+            "revision": "88edab0803230a3898347e77b474f8c1820a1f20",
             "packages": [
                 "."
             ]
@@ -68,7 +68,7 @@
         {
             "name": "github.com/mattn/go-sqlite3",
             "branch": "master",
-            "revision": "d5ffb5c0cca8778699a929b236766f4a7af674e8",
+            "revision": "3c6eef45ff2de301fee18d11cd8727f65754eeb5",
             "packages": [
                 "."
             ]
@@ -76,7 +76,7 @@
         {
             "name": "github.com/supme/directEmail",
             "branch": "master",
-            "revision": "384a31d8ebd0f2448ea6a446d78af5b51db4a0c5",
+            "revision": "e6b3542749cf1fe0abe1f39531da1166d9eb8f6c",
             "packages": [
                 "."
             ]
@@ -92,7 +92,7 @@
         {
             "name": "golang.org/x/crypto",
             "branch": "master",
-            "revision": "94eea52f7b742c7cbe0b03b22f0c4c8631ece122",
+            "revision": "9de5f2eaf759b4c4550b3db39fed2e9e5f86f45c",
             "packages": [
                 "md4"
             ]
@@ -100,9 +100,8 @@
         {
             "name": "golang.org/x/net",
             "branch": "master",
-            "revision": "dc871a5d77e227f5bbf6545176ef3eeebf87e76e",
+            "revision": "f5dfe339be1d06f81b22525fe34671ee7d2c8904",
             "packages": [
-                "context",
                 "idna",
                 "proxy"
             ]
@@ -110,7 +109,7 @@
         {
             "name": "golang.org/x/text",
             "branch": "master",
-            "revision": "be25de41fadfae372d6470bda81ca6beb55ef551",
+            "revision": "4e4a3210bb54bb31f6ab2cdca2edcc0b50c420c1",
             "packages": [
                 "secure/bidirule",
                 "unicode/bidi",

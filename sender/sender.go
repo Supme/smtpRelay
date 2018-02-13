@@ -19,6 +19,8 @@ func Run() {
 		}
 		model.Config.Hostname = h
 	}
+
+
 	go sendQueue()
 	go resendQueue()
 }

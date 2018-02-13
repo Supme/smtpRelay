@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"fmt"
 )
 
 // Config application config
@@ -35,6 +36,8 @@ var (
 	QueueDb *xorm.Engine
 	// StatusDb status db connection
 	StatusDb *xorm.Engine
+
+	whereInterval string
 )
 
 // Queue queue email model
@@ -71,6 +74,10 @@ func OpenQueueDb() (err error) {
 		return
 	}
 	QueueDb.ShowSQL(Config.Debug)
+	QueueDb.SetTZLocation(time.Local)
+	QueueDb.SetTZDatabase(time.Local)
+	whereInterval = createWhereInterval()
+
 	return QueueDb.Sync2(new(Queue))
 }
 
@@ -81,8 +88,26 @@ func OpenStatusDb() (err error) {
 		return
 	}
 	StatusDb.ShowSQL(Config.Debug)
-
+	StatusDb.SetTZLocation(time.Local)
+	StatusDb.SetTZDatabase(time.Local)
 	return StatusDb.Sync2(new(status))
+}
+
+func createWhereInterval() string {
+	var where string
+	switch QueueDb.Dialect().DriverName() {
+	case "sqlite3":
+		where = "updated_at<DATETIME('NOW', '-%d Minute')"
+	case "mssql":
+		where = "updated_at<DATEADD(mi, -%d, getdate())"
+	case "mysql":
+		where = "updated_at<NOW() - INTERVAL %d MINUTE)"
+	case "postgres":
+		where = "updated_at<now()::time - INTERVAL '%d min'"
+	default:
+		log.Fatal("unsuported database driver")
+	}
+	return fmt.Sprintf(where, Config.RepeatIntervalMinutes)
 }
 
 // AddToQueue add email to queue
@@ -118,8 +143,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
 // GetRepeatQueue get `limit` number emails for resend
 func GetRepeatQueue(limit uint) []Queue {
 	var emails []Queue
-	if err := QueueDb.Where("updated_at < ? AND repeat > 0",
-		time.Now().Add(-1*time.Minute*time.Duration(Config.RepeatIntervalMinutes))).
+	if err := QueueDb.Where(whereInterval).
+		And( "repeat > 0").
 		Limit(int(limit)).
 		Find(&emails); err != nil {
 		log.Print(err)
@@ -145,11 +170,12 @@ func SetStatus(email *Queue) {
 		setStatus(email)
 	} else {
 		if strings.HasPrefix(email.LaterStatus, "4") {
-			if _, err := QueueDb.Table(new(Queue)).
-				ID(email.ID).Update(&Queue{
-				Repeat:      email.Repeat,
-				LaterStatus: email.LaterStatus,
-			}); err != nil {
+			if _, err := QueueDb.Exec(`UPDATE "queue" SET "repeat" = ?, "later_status" = ?, "updated_at" = ? WHERE "id"=?`,
+					email.Repeat,
+					email.LaterStatus,
+					time.Now(),
+					email.ID,
+				); err != nil {
 				log.Print(err)
 			}
 		} else {
