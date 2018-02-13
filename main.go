@@ -41,7 +41,9 @@ func main() {
 	}
 	defer model.StatusDb.Close()
 
+	fmt.Println("Start SMTP sender")
 	sender.Run()
 
+	fmt.Println("Starting SMTP server...")
 	server.Run()
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/supme/smtpRelay/model"
 	"log"
 	"regexp"
+	"fmt"
 )
 
 var (
@@ -78,7 +79,7 @@ func Run() {
 	s.OnProtoError = func(err error) {
 		log.Print(err.Error())
 	}
-	log.Printf("Starting SMTP server on %s", model.Config.SMTPListenAddr)
+	fmt.Printf("SMTP server runing on %s", model.Config.SMTPListenAddr)
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
 	}
