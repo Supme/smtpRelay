@@ -10,7 +10,7 @@ import (
 	"os"
 )
 
-const version = "v0.2.5"
+const version = "v0.2.6"
 
 var configFile string
 
