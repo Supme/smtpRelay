@@ -8,16 +8,16 @@ small SMTP relay
 example config.ini
 ``` $ini
 # Db for queue emails
-QueueDbDialect = "sqlite3"
-QueueDbConnect = "test.db"
+QueueDbDialect = "mssql"
+QueueDbConnect = "server=127.0.0.1;user id=SmtpRelayLog;password=pa55w0rd;database=SmtpRelayLog;connection timeout=300"
 
 # Db for log
-StatusDbDialect = "sqlite3"
-StatusDbConnect = "test.db"
+StatusDbDialect = "mssql"
+StatusDbConnect = "server=127.0.0.1;user id=SmtpRelayLog;password=pa55w0rd;database=SmtpRelayLog;connection timeout=300"
 
 Hostname = "localhost" # hostname for HELO, if blank, then get mashine hostname
 
-AllowIP = ["192.168.33.117", "192.168.1.20"] # allow sender IP
+AllowIP = ["127.0.0.1", "192.168.1.20"] # allow sender IP
 
 AllowDomains = ["dmbasis.ru"] # allow send email domain
 
