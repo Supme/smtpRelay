@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"github.com/XS4ALL/go-smtpd/smtpd"
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
-//	_ "github.com/go-sql-driver/mysql"   // MySQL driver
+	//	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/go-xorm/xorm"
-//	_ "github.com/lib/pq"           // Postgres driver
-//	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	//	_ "github.com/lib/pq"           // Postgres driver
+	//	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"log"
-	"strings"
-	"time"
-	"sync"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // Config application config
@@ -39,7 +39,7 @@ var (
 	// StatusDb status db connection
 	StatusDb *xorm.Engine
 
-//	sqlDateTimeNow   string
+	//	sqlDateTimeNow   string
 	sqlWhereInterval string
 )
 

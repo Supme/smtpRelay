@@ -2,6 +2,7 @@ package sender
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"github.com/supme/smtpRelay/model"
 	"github.com/supme/smtpSender"
@@ -9,10 +10,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
-	"strconv"
-	"encoding/base64"
 )
 
 // Run start sending queue emails
@@ -90,7 +90,7 @@ func resendQueue(pipe smtpSender.Pipe) {
 }
 
 func send(pipe smtpSender.Pipe, email model.Queue) {
-	e :=  smtpSender.Email{
+	e := smtpSender.Email{
 		ID:   strconv.FormatUint(email.ID, 10),
 		From: email.From,
 		To:   email.Rcpt,
