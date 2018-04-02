@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"github.com/XS4ALL/go-smtpd/smtpd"
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
-	_ "github.com/go-sql-driver/mysql"   // MySQL driver
+//	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/go-xorm/xorm"
-	_ "github.com/lib/pq"           // Postgres driver
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+//	_ "github.com/lib/pq"           // Postgres driver
+//	_ "github.com/mattn/go-sqlite3" // SQLite driver
 	"log"
 	"strings"
 	"time"
+	"sync"
+	"strconv"
 )
 
 // Config application config
@@ -37,7 +39,8 @@ var (
 	// StatusDb status db connection
 	StatusDb *xorm.Engine
 
-	whereInterval string
+//	sqlDateTimeNow   string
+	sqlWhereInterval string
 )
 
 // Queue queue email model
@@ -67,6 +70,40 @@ type status struct {
 	Status      string `xorm:"MEDIUMTEXT 'status'"`
 }
 
+type sendingT struct {
+	sync.Mutex
+	id map[uint64]struct{}
+}
+
+func (s *sendingT) WhereIn() string {
+	s.Lock()
+	defer s.Unlock()
+	var list []string
+	for id := range s.id {
+		list = append(list, strconv.FormatUint(id, 10))
+	}
+	if len(list) == 0 {
+		return ""
+	}
+	return `"id" NOT IN (` + strings.Join(list, `,`) + `)`
+}
+
+func (s *sendingT) Add(queue ...Queue) {
+	s.Lock()
+	defer s.Unlock()
+	for i := range queue {
+		s.id[queue[i].ID] = struct{}{}
+	}
+}
+
+func (s *sendingT) Del(id uint64) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.id, id)
+}
+
+var sending = sendingT{id: map[uint64]struct{}{}}
+
 // OpenQueueDb open queue database
 func OpenQueueDb() (err error) {
 	QueueDb, err = xorm.NewEngine(Config.QueueDbDialect, Config.QueueDbConnect)
@@ -74,10 +111,8 @@ func OpenQueueDb() (err error) {
 		return
 	}
 	QueueDb.ShowSQL(Config.Debug)
-	QueueDb.SetTZLocation(time.Local)
-	QueueDb.SetTZDatabase(time.Local)
-	whereInterval = createWhereInterval()
-
+	QueueDb.TZLocation = time.Local
+	prepareSQLQuery()
 	return QueueDb.Sync2(new(Queue))
 }
 
@@ -88,26 +123,29 @@ func OpenStatusDb() (err error) {
 		return
 	}
 	StatusDb.ShowSQL(Config.Debug)
-	StatusDb.SetTZLocation(time.Local)
-	StatusDb.SetTZDatabase(time.Local)
+	StatusDb.TZLocation = time.Local
 	return StatusDb.Sync2(new(status))
 }
 
-func createWhereInterval() string {
+func prepareSQLQuery() {
 	var where string
 	switch QueueDb.Dialect().DriverName() {
 	case "sqlite3":
+		//sqlDateTimeNow = "DATETIME('NOW')"
 		where = "updated_at<DATETIME('NOW', '-%d Minute')"
 	case "mssql":
+		//sqlDateTimeNow = "getdate()"
 		where = "updated_at<DATEADD(mi, -%d, getdate())"
 	case "mysql":
+		//sqlDateTimeNow = "NOW()"
 		where = "updated_at<NOW() - INTERVAL %d MINUTE)"
 	case "postgres":
+		//sqlDateTimeNow = "now()::time"
 		where = "updated_at<now()::time - INTERVAL '%d min'"
 	default:
 		log.Fatal("unsuported database driver")
 	}
-	return fmt.Sprintf(where, Config.RepeatIntervalMinutes)
+	sqlWhereInterval = fmt.Sprintf(where, Config.RepeatIntervalMinutes)
 }
 
 // AddToQueue add email to queue
@@ -119,19 +157,21 @@ func AddToQueue(messageType, messageID string, from smtpd.MailAddress, rcpts []s
 		return err
 	}
 	for _, rcpt := range rcpts {
-		if _, err := session.Query(`
+		_, err := session.Query(`
 INSERT INTO "queue"
   ("created_at","updated_at","message_type","message_id","from","from_hostname","rcpt","rcpt_hostname","data","repeat","later_status")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
-			time.Now(),
-			time.Now(),
+			time.Now().Local(),
+			time.Now().Local(),
 			messageType,
 			messageID,
 			from.Email(),
 			from.Hostname(),
 			rcpt.Email(),
 			rcpt.Hostname(),
-			base64.StdEncoding.EncodeToString(data)); err != nil {
+			base64.StdEncoding.EncodeToString(data),
+		)
+		if err != nil {
 			log.Println(err)
 			session.Rollback()
 			return err
@@ -143,23 +183,34 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
 // GetRepeatQueue get `limit` number emails for resend
 func GetRepeatQueue(limit uint) []Queue {
 	var emails []Queue
-	if err := QueueDb.Where(whereInterval).
-		And("repeat > 0").
+	query := QueueDb.Where(sqlWhereInterval).And("repeat > 0")
+	list := sending.WhereIn()
+	if list != "" {
+		query.And(sending.WhereIn())
+	}
+	if err := query.
 		Limit(int(limit)).
 		Find(&emails); err != nil {
 		log.Print(err)
 	}
+	sending.Add(emails...)
 	return emails
 }
 
 // GetNewQueue get `limit` number new emails
 func GetNewQueue(limit uint) []Queue {
 	var emails []Queue
-	if err := QueueDb.Where("repeat=0").
+	query := QueueDb.Where("repeat=0")
+	list := sending.WhereIn()
+	if list != "" {
+		query.And(sending.WhereIn())
+	}
+	if err := query.
 		Limit(int(limit)).
 		Find(&emails); err != nil {
 		log.Print(err)
 	}
+	sending.Add(emails...)
 	return emails
 }
 
@@ -170,10 +221,10 @@ func SetStatus(email *Queue) {
 		setStatus(email)
 	} else {
 		if strings.HasPrefix(email.LaterStatus, "4") {
-			if _, err := QueueDb.Exec(`UPDATE "queue" SET "repeat" = ?, "later_status" = ?, "updated_at" = ? WHERE "id"=?`,
+			if _, err := QueueDb.Exec(`UPDATE "queue" SET "repeat"=?, "later_status"=?, "updated_at"=? WHERE "id"=?`,
 				email.Repeat,
 				email.LaterStatus,
-				time.Now(),
+				time.Now().Local(),
 				email.ID,
 			); err != nil {
 				log.Print(err)
@@ -182,6 +233,7 @@ func SetStatus(email *Queue) {
 			setStatus(email)
 		}
 	}
+	sending.Del(email.ID)
 }
 
 func setStatus(email *Queue) {
@@ -190,7 +242,7 @@ INSERT INTO "status"
   ("queued_at","sending_at","from","rcpt","message_type","message_id","status")
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		email.CreatedAt,
-		time.Now(),
+		time.Now().Local(),
 		email.From,
 		email.Rcpt,
 		email.MessageType,

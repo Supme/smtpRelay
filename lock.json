@@ -1,10 +1,10 @@
 {
-    "memo": "b63a447d6eb75b598ac9b34dae885ac72d97a1abfe1b90ce602fd7af8020baaf",
+    "memo": "d3585e45817fc5090a4d042a8a16f6004723b6cb756a6a7e4a5c1a447e2b6250",
     "projects": [
         {
             "name": "github.com/BurntSushi/toml",
             "branch": "master",
-            "revision": "a368813c5e648fee92e5f6c30e3944ff9d5e8895",
+            "revision": "d94612f9fc140360834f9742158c70b5c5b5535b",
             "packages": [
                 "."
             ]
@@ -20,7 +20,7 @@
         {
             "name": "github.com/denisenkom/go-mssqldb",
             "branch": "master",
-            "revision": "ee492709d4324cdcb051d2ac266b77ddc380f5c5",
+            "revision": "2c6544812a77396578c2c2325ce320c36f76198a",
             "packages": [
                 "."
             ]
@@ -28,7 +28,7 @@
         {
             "name": "github.com/go-sql-driver/mysql",
             "branch": "master",
-            "revision": "bc14601d1bd56421dd60f561e6052c9ed77f9daf",
+            "revision": "14f4292c08c0daf077adddd5824cffc82a797ff4",
             "packages": [
                 "."
             ]
@@ -36,15 +36,15 @@
         {
             "name": "github.com/go-xorm/builder",
             "branch": "master",
-            "revision": "488224409dd8aa2ce7a5baf8d10d55764a913738",
+            "revision": "c6e604e9c7b7461715091e14ad0c242ec44c26e4",
             "packages": [
                 "."
             ]
         },
         {
             "name": "github.com/go-xorm/core",
-            "version": "v0.5.7",
-            "revision": "da1adaf7a28ca792961721a34e6e04945200c890",
+            "branch": "master",
+            "revision": "e8409d73255791843585964791443dbad877058c",
             "packages": [
                 "."
             ]
@@ -52,7 +52,7 @@
         {
             "name": "github.com/go-xorm/xorm",
             "branch": "master",
-            "revision": "2e295feace1835837c90e225d1bbf56e8977ec4d",
+            "revision": "a55bded5185d3966a1906b0a48ef72281629809c",
             "packages": [
                 "."
             ]
@@ -60,7 +60,7 @@
         {
             "name": "github.com/lib/pq",
             "branch": "master",
-            "revision": "88edab0803230a3898347e77b474f8c1820a1f20",
+            "revision": "2704adc878c21e1329f46f6e56a1c387d788ff94",
             "packages": [
                 "."
             ]
@@ -68,15 +68,15 @@
         {
             "name": "github.com/mattn/go-sqlite3",
             "branch": "master",
-            "revision": "3c6eef45ff2de301fee18d11cd8727f65754eeb5",
+            "revision": "d5ffb5c0cca8778699a929b236766f4a7af674e8",
             "packages": [
                 "."
             ]
         },
         {
-            "name": "github.com/supme/directEmail",
-            "branch": "master",
-            "revision": "e6b3542749cf1fe0abe1f39531da1166d9eb8f6c",
+            "name": "github.com/supme/smtpSender",
+            "branch": "developed",
+            "revision": "1bab2b33728eaea0ee5fa420d79767d0c3235d9b",
             "packages": [
                 "."
             ]
@@ -84,7 +84,7 @@
         {
             "name": "github.com/toorop/go-dkim",
             "branch": "master",
-            "revision": "83672023c79e6b352bf9d4908e6c060c7a24323c",
+            "revision": "43c1bb05e85404d07a5020ad38c6b67b3a039b86",
             "packages": [
                 "."
             ]
@@ -92,7 +92,7 @@
         {
             "name": "golang.org/x/crypto",
             "branch": "master",
-            "revision": "9de5f2eaf759b4c4550b3db39fed2e9e5f86f45c",
+            "revision": "12892e8c234f4fe6f6803f052061de9057903bb2",
             "packages": [
                 "md4"
             ]
@@ -100,28 +100,10 @@
         {
             "name": "golang.org/x/net",
             "branch": "master",
-            "revision": "f5dfe339be1d06f81b22525fe34671ee7d2c8904",
+            "revision": "a8b9294777976932365dabb6640cf1468d95c70f",
             "packages": [
-                "idna",
+                "context",
                 "proxy"
-            ]
-        },
-        {
-            "name": "golang.org/x/text",
-            "branch": "master",
-            "revision": "4e4a3210bb54bb31f6ab2cdca2edcc0b50c420c1",
-            "packages": [
-                "secure/bidirule",
-                "unicode/bidi",
-                "unicode/norm"
-            ]
-        },
-        {
-            "name": "google.golang.org/appengine",
-            "version": "v1.0.0",
-            "revision": "150dc57a1b433e64154302bdc40b6bb8aefa313a",
-            "packages": [
-                "cloudsql"
             ]
         }
     ]

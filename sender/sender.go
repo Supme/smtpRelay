@@ -1,13 +1,18 @@
 package sender
 
 import (
-	"encoding/base64"
-	"github.com/supme/directEmail"
+	"bytes"
+	"fmt"
 	"github.com/supme/smtpRelay/model"
+	"github.com/supme/smtpSender"
+	"io"
 	"log"
 	"os"
-	"sync"
+	"os/signal"
+	"syscall"
 	"time"
+	"strconv"
+	"encoding/base64"
 )
 
 // Run start sending queue emails
@@ -20,56 +25,106 @@ func Run() {
 		model.Config.Hostname = h
 	}
 
-	go sendQueue()
-	go resendQueue()
+	pipeQueue := smtpSender.NewPipe(
+		smtpSender.Config{
+			Hostname: model.Config.Hostname,
+			Stream:   int(model.Config.SendStream),
+		},
+	)
+	pipeQueue.Start()
+	go sendQueue(pipeQueue)
+
+	time.Sleep(1 * time.Second)
+	pipeResend := smtpSender.NewPipe(
+		smtpSender.Config{
+			Hostname: model.Config.Hostname,
+			Stream:   int(model.Config.ResendStream),
+		},
+	)
+	pipeResend.Start()
+	go resendQueue(pipeResend)
+
+	breakSigs := make(chan os.Signal, 1)
+	signal.Notify(breakSigs, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGKILL)
+
+	go func() {
+		for {
+			select {
+			case <-breakSigs:
+				pipeQueue.Stop()
+				pipeResend.Stop()
+				goto End
+			}
+		}
+	End:
+		log.Println("Stoped all sender for exit")
+		os.Exit(0)
+	}()
+
 }
 
-func sendQueue() {
+func sendQueue(pipe smtpSender.Pipe) {
 	for {
 		emails := model.GetNewQueue(model.Config.SendStream)
 		if len(emails) == 0 {
 			time.Sleep(10 * time.Second)
 		} else {
-			send(emails)
+			for i := range emails {
+				send(pipe, emails[i])
+			}
 		}
 	}
 }
 
-func resendQueue() {
+func resendQueue(pipe smtpSender.Pipe) {
 	for {
 		emails := model.GetRepeatQueue(model.Config.ResendStream)
 		if len(emails) == 0 {
 			time.Sleep(10 * time.Second)
 		} else {
-			send(emails)
+			for i := range emails {
+				send(pipe, emails[i])
+			}
 		}
 	}
 }
 
-func send(emails []model.Queue) {
-	var wg sync.WaitGroup
-	for i := range emails {
-		wg.Add(1)
-		go func(wg *sync.WaitGroup, email model.Queue) {
-			defer wg.Done()
+func send(pipe smtpSender.Pipe, email model.Queue) {
+	e :=  smtpSender.Email{
+		ID:   strconv.FormatUint(email.ID, 10),
+		From: email.From,
+		To:   email.Rcpt,
+		WriteCloser: func(w io.WriteCloser) error {
 			dataByte, err := base64.StdEncoding.DecodeString(email.Data)
 			if err != nil {
-				email.LaterStatus = "550 " + err.Error()
-				return
+				log.Printf("Send queue base64 decode error: %s", err)
+				return fmt.Errorf("Send queue base64 decode error: %s", err)
 			}
-			sender := directEmail.New()
-			sender.Host = model.Config.Hostname
-			sender.FromEmail = email.From
-			sender.ToEmail = email.Rcpt
-			sender.SetRawMessageBytes(dataByte)
-			err = sender.Send()
+			bodyBuf := new(bytes.Buffer)
+			_, err = bodyBuf.Write(dataByte)
 			if err != nil {
-				email.LaterStatus = err.Error()
+				log.Printf("Send queue buffer write error: %s", err)
+				return fmt.Errorf("Send queue buffer write error: %s", err)
+			}
+			_, err = io.Copy(w, bodyBuf)
+			if err != nil {
+				log.Printf("Send queue copy buffer to writer error: %s", err)
+				return fmt.Errorf("Send queue copy buffer to writer error: %s", err)
+			}
+			return nil
+		},
+		ResultFunc: func(result smtpSender.Result) {
+			if result.Err != nil {
+				email.LaterStatus = result.Err.Error()
 			} else {
 				email.LaterStatus = "250 2.0.0 Ok"
 			}
 			model.SetStatus(&email)
-		}(&wg, emails[i])
+		},
 	}
-	wg.Wait()
+
+	err := pipe.Send(e)
+	if err != nil {
+		log.Printf("Send email id '%d' error %+v\n", email.ID, err)
+	}
 }

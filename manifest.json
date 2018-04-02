@@ -18,8 +18,8 @@
         "github.com/mattn/go-sqlite3": {
             "branch": "master"
         },
-        "github.com/supme/directEmail": {
-            "branch": "master"
+        "github.com/supme/smtpSender": {
+            "branch": "developed"
         }
     }
 }
