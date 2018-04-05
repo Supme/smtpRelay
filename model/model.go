@@ -26,10 +26,10 @@ var Config struct {
 	AllowIP               []string `toml:"AllowIP"`
 	AllowDomains          []string `toml:"AllowDomains"`
 	SMTPListenAddr        string   `toml:"SMTPListenAddr"`
-	MaxRepeatSend         uint     `toml:"MaxRepeatSend"`
-	RepeatIntervalMinutes uint     `toml:"RepeatIntervalMinutes"`
-	SendStream            uint     `toml:"SendStream"`
-	ResendStream          uint     `toml:"ResendStream"`
+	MaxRepeatSend         int     `toml:"MaxRepeatSend"`
+	RepeatIntervalMinutes int     `toml:"RepeatIntervalMinutes"`
+	SendStream            int     `toml:"SendStream"`
+	ResendStream          int     `toml:"ResendStream"`
 	Debug                 bool     `toml:"Debug"`
 }
 
@@ -55,7 +55,7 @@ type Queue struct {
 	Rcpt         string
 	RcptHostname string
 	Data         string `xorm:"LONGTEXT 'data'"`
-	Repeat       uint
+	Repeat       int
 	LaterStatus  string `xorm:"MEDIUMTEXT 'later_status'"`
 }
 
@@ -181,9 +181,48 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
 }
 
 // GetRepeatQueue get `limit` number emails for resend
-func GetRepeatQueue(limit uint) []Queue {
+func GetRepeatQueue(limit int) []Queue {
 	var emails []Queue
 	query := QueueDb.Where(sqlWhereInterval).And("repeat > 0")
+	list := sending.WhereIn()
+	if list != "" {
+		query.And(sending.WhereIn())
+	}
+	if err := query.
+		Limit(limit).
+		Find(&emails); err != nil {
+		log.Print(err)
+	}
+	sending.Add(emails...)
+	return emails
+}
+
+// GetNewQueue get `limit` number new emails
+func GetNewQueue(limit int) []Queue {
+	emails := getNewBlankMessageIdQueue(limit)
+	limit = limit - len(emails)
+	if limit < 1 {
+		sending.Add(emails...)
+		return emails
+	}
+	query := QueueDb.Where("repeat=0")
+	list := sending.WhereIn()
+	if list != "" {
+		query.And(sending.WhereIn())
+	}
+	if err := query.
+		Limit(limit).
+		Find(&emails); err != nil {
+		log.Print(err)
+	}
+	sending.Add(emails...)
+	return emails
+}
+
+func getNewBlankMessageIdQueue(limit int) []Queue {
+	var emails []Queue
+	query := QueueDb.Where("repeat=0")
+	query.And("message_id=''")
 	list := sending.WhereIn()
 	if list != "" {
 		query.And(sending.WhereIn())
@@ -197,22 +236,7 @@ func GetRepeatQueue(limit uint) []Queue {
 	return emails
 }
 
-// GetNewQueue get `limit` number new emails
-func GetNewQueue(limit uint) []Queue {
-	var emails []Queue
-	query := QueueDb.Where("repeat=0")
-	list := sending.WhereIn()
-	if list != "" {
-		query.And(sending.WhereIn())
-	}
-	if err := query.
-		Limit(int(limit)).
-		Find(&emails); err != nil {
-		log.Print(err)
-	}
-	sending.Add(emails...)
-	return emails
-}
+
 
 // SetStatus set email send status
 func SetStatus(email *Queue) {
